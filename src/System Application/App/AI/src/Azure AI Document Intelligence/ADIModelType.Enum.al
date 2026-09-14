@@ -4,6 +4,7 @@
 // ------------------------------------------------------------------------------------------------
 namespace System.AI.DocumentIntelligence;
 
+// Fork-only clean backport test marker; no runtime behavior is changed.
 /// <summary>
 /// The supported model types for Azure Document Intelligence.
 /// </summary>
