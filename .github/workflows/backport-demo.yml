@@ -1,0 +1,166 @@
+name: Backport to 29.x
+run-name: Backport PR ${{ inputs.source_pr }} to 29.x (dry run = ${{ inputs.dry_run }})
+
+on:
+  workflow_dispatch:
+    inputs:
+      source_pr:
+        description: Merged source PR number in this test fork
+        required: true
+        type: string
+      dry_run:
+        description: Preview without creating or changing repository objects
+        required: true
+        default: true
+        type: boolean
+
+permissions: {}
+
+concurrency:
+  group: backport-demo-${{ github.repository_id }}-${{ inputs.source_pr }}-29
+  cancel-in-progress: false
+
+env:
+  INPUT_SOURCE_PR: ${{ inputs.source_pr }}
+  INPUT_DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+  ALLOWED_ACTOR_IDS: ${{ vars.BACKPORT_ALLOWED_ACTOR_IDS || '59250993' }}
+  PYTHONDONTWRITEBYTECODE: '1'
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  validate:
+    if: github.repository == 'AleksanderGladkov/BCApps-Backport-Test' && github.repository_id == '1369849596' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts/backport-demo
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+      - name: Validate requester, source history and target
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python .github/scripts/backport-demo/controller.py validate
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: backport-plan-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/backport-state
+          if-no-files-found: ignore
+          retention-days: 7
+
+  track:
+    needs: validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      actions: read
+      contents: read
+      pull-requests: read
+      issues: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts/backport-demo
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: backport-plan-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/backport-state
+      - name: Create or reuse tracking Issue (no writes during dry run)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python .github/scripts/backport-demo/controller.py track
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: backport-tracking-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/backport-state
+          if-no-files-found: error
+          retention-days: 7
+
+  prepare:
+    needs: track
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      pull-requests: read
+      issues: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts/backport-demo
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: backport-tracking-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/backport-state
+      - name: Apply the verified source in an isolated checkout
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python .github/scripts/backport-demo/controller.py prepare
+      - name: Save clean result or Milica's conflict handoff
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: backport-result-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/backport-state
+          if-no-files-found: error
+          retention-days: 7
+
+  # Milica's resolver is deliberately not invoked yet. A conflict is reported
+  # as needs-attention and cannot be published. Add a separate read-only/model
+  # job and independent resolution verification before accepting AI patches.
+  publish:
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      actions: read
+      contents: write
+      issues: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: .github/scripts/backport-demo
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.13'
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: backport-result-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/backport-state
+      - name: Recompute and verify the change before publishing
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python .github/scripts/backport-demo/controller.py publish
+      - name: Preserve publication and recovery evidence, including failures
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: backport-publication-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/backport-state
+          if-no-files-found: error
+          retention-days: 7
