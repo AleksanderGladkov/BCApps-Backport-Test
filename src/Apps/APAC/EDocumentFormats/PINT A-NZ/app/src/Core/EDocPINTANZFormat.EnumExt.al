@@ -13,3 +13,4 @@ enumextension 28005 "E-Doc. PINT A-NZ Format" extends "E-Document Format"
         Implementation = "E-Document" = "PINT A-NZ";
     }
 }
+// PowerShell backport publication verification.
