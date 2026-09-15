@@ -3,9 +3,46 @@ title: Manual backport test workflow
 description: Alexander's fork-only clean backport executor and Milica's conflict handoff.
 ---
 
+## Migration status and local tests
+
+PowerShell cutover preparation is local to the migration branch. The focused
+workflow contract checks pass; full hosted Windows/Ubuntu parity, deployment,
+dry-run, existing-object reuse, and fresh-publication acceptance remain pending.
+Do not dispatch the production workflow from the migration branch or remove
+the Python reference files before those separately approved gates pass.
+
+Production requires PowerShell 7.4+, bundled .NET 8+, and Git. Tests additionally
+require Python 3.13 (Unicode 15.1.0) and exactly Pester 5.7.1. Provision Pester
+only during test setup, in user scope, when that version is absent:
+
+```powershell
+if (-not (Get-Module -ListAvailable Pester | Where-Object Version -EQ ([version]'5.7.1'))) {
+  Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Repository PSGallery -Force -ErrorAction Stop
+}
+Import-Module Pester -RequiredVersion 5.7.1 -ErrorAction Stop
+```
+
+From the repository root, run the unchanged reference suite and full parity
+gate offline. Tests use fake HTTP and temporary local Git origins, not GitHub:
+
+```powershell
+$env:BACKPORT_TEST_BASELINE_DIR = Join-Path (Get-Location) '.github/scripts/backport-demo'
+$env:PYTHONDONTWRITEBYTECODE = '1'
+python -B -m unittest discover -s .github/scripts/backport-demo -p 'test_*.py' -v
+if ($LASTEXITCODE -ne 0) { throw 'Python reference suite failed.' }
+& ./.github/scripts/backport-demo/Run-Tests.ps1 -ResultPath (Join-Path ([IO.Path]::GetTempPath()) 'backport-pester.xml')
+```
+
+The manual test workflow runs both suites on Ubuntu and Windows with independent
+30-minute jobs, Contents read only, and no publishing credential. It logs runtime,
+Git and Pester versions and always attempts to retain XML results for seven days
+under distinct OS/attempt artifact names. A missing result or failed dependency
+setup is not acceptance. The full gate requires all 67 mapped baseline scenarios
+and TEST-013 through TEST-024, with no skipped or unexecuted required cases.
+
 ## Run it
 
-1. Enable only Backport executor tests and Backport to 29.x in this fork.
+1. Do not enable inherited BCApps workflows or change unrelated workflows.
 2. Run Backport executor tests from Actions. It makes no remote writes.
 3. Create and squash-merge a source PR into this fork's main, changing only
    regular text AL files under src. No automation, binary files or submodules.
@@ -65,9 +102,14 @@ days and are diagnostics, not a complete durable external ledger.
 
 ## Files and state
 
-The workflow calls the trusted [controller](controller.py) in four stages:
-validate, track, prepare, publish. [Tests](test_controller.py) use only Python's
-standard library and Git. No product AL build is performed by these tests.
+The prepared workflow calls [Invoke-Backport.ps1](Invoke-Backport.ps1) with
+`-Stage validate`, `track`, `prepare`, or `publish`, loading only the trusted
+[module](Backport.psm1) and adjacent [compatibility data](compat.json).
+The unchanged [Python controller](controller.py) and [reference tests](test_controller.py)
+remain beside the [Pester suite](Backport.Tests.ps1) during migration. No product
+AL build is performed by these tests. Compatibility data records Python 3.13 /
+Unicode 15.1.0 provenance and the applicable license notices; it is not generated
+or downloaded by production jobs.
 
 Each job keeps state under RUNNER_TEMP/backport-state and uploads the whole
 directory even on failure. It contains the validated plan, Issue tracking,
@@ -76,6 +118,37 @@ when diagnosing an uncertain write. Logs avoid secrets and untrusted PR text.
 
 Token-created PR workflows may require manual owner approval. A successful
 backport run is evidence of PR preparation only, not a passed BCApps build.
+
+## Safety correspondence and rollback
+
+The eight correspondence decisions in [parity.json](parity.json) retain exact
+source/target/actor checks, isolated temporary repositories, verified squash
+cherry-pick with independent reconstruction, exact bot-object reconciliation,
+journals, history checks, create-only leases and remote read-back. Synthetic
+safety tests supplement the 67 baseline cases. This remains a one-source,
+one-target executor, not a wire-compatible implementation of another coordinator.
+Neither protected backport nor conflict-resolver package is imported or executed.
+
+The same metadata records these five helper dispositions:
+
+- `byte-safe-blob`: adapted to independent bounded byte-stream transport and argument lists.
+- `canonical-atomic-json`: adapted; sorted keys and atomic writes preserve Python's exact bytes and types.
+- `result-before-pr`: adapted to recomputed content and verified legitimate subset deltas.
+- `github-readback`: adapted to fixed-scope HTTP, branch/base/head verification and create-only publication.
+- `publication-receipt`: deferred; retain existing journals and read-back without adding a result schema.
+
+Resolver adaptation remains deferred. Preparation `published=false` is not a
+final publication verdict. These tests do not establish AI resolution, label
+automation, AL correctness or delivery of a shipped fix.
+
+Before deploying, record the tested pre-cutover main SHA, workflow ID/history,
+source/target refs and existing object identities. Restore the recorded Python
+version only through a reviewed revert in place, never a reset, force-push or
+renamed fallback workflow. Keep Python source/tests/exporter until hosted
+acceptance and cleanup are approved. If any write may have occurred, stop
+dispatches, retain journals/artifacts/history and reconcile exact objects before
+retrying. Rollback does not authorize closing Issues, merging PRs, deleting
+branches/comments/history, or retrying an uncertain create.
 
 ## Milica's next integration step
 

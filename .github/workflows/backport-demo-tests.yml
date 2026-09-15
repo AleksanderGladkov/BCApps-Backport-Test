@@ -9,18 +9,59 @@ permissions:
 jobs:
   test:
     if: github.repository == 'AleksanderGladkov/BCApps-Backport-Test'
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-          sparse-checkout: .github/scripts/backport-demo
+          sparse-checkout: |
+            .github/scripts/backport-demo
+            .github/workflows/backport-demo.yml
+            .github/workflows/backport-demo-tests.yml
+          sparse-checkout-cone-mode: false
       - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
         with:
           python-version: '3.13'
-      - name: Test offline with fake GitHub responses and temporary Git repos
-        env:
-          PYTHONDONTWRITEBYTECODE: '1'
-        run: python -m unittest discover -s .github/scripts/backport-demo -p 'test_*.py' -v
+      - name: Check runtimes and provision pinned test dependency
+        id: setup
+        run: |
+          if ($PSVersionTable.PSVersion -lt [version]'7.4' -or [Environment]::Version -lt [version]'8.0') {
+            throw 'PowerShell 7.4+ and .NET 8+ are required.'
+          }
+          if (-not (Get-Module -ListAvailable Pester | Where-Object Version -EQ ([version]'5.7.1'))) {
+            Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Repository PSGallery -Force -ErrorAction Stop
+          }
+          Import-Module Pester -RequiredVersion 5.7.1 -ErrorAction Stop
+          Write-Host ("PowerShell {0}; .NET {1}; Pester {2}" -f $PSVersionTable.PSVersion, [Environment]::Version, (Get-Module Pester).Version)
+          git --version
+          if ($LASTEXITCODE -ne 0) { throw 'Git version check failed.' }
+          python -B -c "import sys, unicodedata; assert sys.version_info[:2] == (3, 13); assert unicodedata.unidata_version == '15.1.0'; print(sys.version); print('Unicode', unicodedata.unidata_version)"
+          if ($LASTEXITCODE -ne 0) { throw 'Python reference runtime check failed.' }
+      - name: Test unchanged Python reference offline
+        run: |
+          python -B -m unittest discover -s .github/scripts/backport-demo -p 'test_*.py' -v
+          if ($LASTEXITCODE -ne 0) { throw 'Python reference suite failed.' }
+      - name: Run full PowerShell parity gate offline
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
+        run: |
+          $env:BACKPORT_TEST_BASELINE_DIR = Join-Path $env:GITHUB_WORKSPACE '.github/scripts/backport-demo'
+          & ./.github/scripts/backport-demo/Run-Tests.ps1 -ResultPath (Join-Path $env:RUNNER_TEMP 'backport-pester.xml')
+      - name: Preserve test results
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: backport-tests-${{ matrix.os }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/backport-pester.xml
+          if-no-files-found: error
+          retention-days: 7

@@ -1,0 +1,793 @@
+{
+  "baseline": {
+    "commit": "514500f55f064aa9ab86607e6d0803f2abd6376c",
+    "controller_lines": 866,
+    "inventory_sha256": "3525faf922d39209c6f2df63b71a2c200a416ccb65fc85bd44efb204a3afd8a7",
+    "license": "MIT; see repository LICENSE",
+    "license_notice": "MIT License\n\nCopyright (c) Microsoft Corporation.\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE",
+    "source": "https://github.com/AleksanderGladkov/BCApps-Backport-Test/tree/514500f55f064aa9ab86607e6d0803f2abd6376c",
+    "source_sha256_lf": {
+      "controller.py": "6818a52f0f8f993f34509fd4902fcfbd08568bcb03f96f9fc9422802501c9a4c",
+      "test_controller.py": "5ea6d6c6072688e1427d0b1dc9ba150b6104feb681d4c9dcf0d014eb634a1992"
+    },
+    "test_count": 67
+  },
+  "baseline_tests": [
+    {
+      "group": "TEST-010",
+      "id": "test_added_and_deleted_files_are_supported",
+      "pester_name": "test_added_and_deleted_files_are_supported"
+    },
+    {
+      "group": "TEST-004",
+      "id": "test_all_stages_dry_run_never_write_remotely",
+      "pester_name": "test_all_stages_dry_run_never_write_remotely"
+    },
+    {
+      "group": "TEST-002",
+      "id": "test_allowlist_comes_only_from_protected_variable",
+      "pester_name": "test_allowlist_comes_only_from_protected_variable"
+    },
+    {
+      "group": "TEST-004",
+      "id": "test_already_applied_requires_content_proof_and_creates_no_pr",
+      "pester_name": "test_already_applied_requires_content_proof_and_creates_no_pr"
+    },
+    {
+      "group": "TEST-011",
+      "id": "test_ambiguous_comment_create_cannot_retry_when_pr_status_changes",
+      "pester_name": "test_ambiguous_comment_create_cannot_retry_when_pr_status_changes"
+    },
+    {
+      "group": "TEST-006",
+      "id": "test_ambiguous_issue_create_is_not_retried_in_same_run",
+      "pester_name": "test_ambiguous_issue_create_is_not_retried_in_same_run"
+    },
+    {
+      "group": "TEST-011",
+      "id": "test_ambiguous_pr_create_is_not_retried",
+      "pester_name": "test_ambiguous_pr_create_is_not_retried"
+    },
+    {
+      "group": "TEST-007",
+      "id": "test_ambiguous_push_cannot_be_retried_without_branch_on_new_run",
+      "pester_name": "test_ambiguous_push_cannot_be_retried_without_branch_on_new_run"
+    },
+    {
+      "group": "TEST-011",
+      "id": "test_api_transport_blocks_dry_writes_before_opening_connection",
+      "pester_name": "test_api_transport_blocks_dry_writes_before_opening_connection"
+    },
+    {
+      "group": "TEST-005",
+      "id": "test_artifacts_cannot_cross_runs_attempts_or_source_context",
+      "pester_name": "test_artifacts_cannot_cross_runs_attempts_or_source_context"
+    },
+    {
+      "group": "TEST-004",
+      "id": "test_clean_cherry_pick_publish_and_duplicate_reconcile",
+      "pester_name": "test_clean_cherry_pick_publish_and_duplicate_reconcile"
+    },
+    {
+      "group": "TEST-012",
+      "id": "test_cli_rejects_inputs_without_echoing_untrusted_values",
+      "pester_name": "test_cli_rejects_inputs_without_echoing_untrusted_values"
+    },
+    {
+      "group": "TEST-006",
+      "id": "test_closed_issue_requires_verified_merged_pr",
+      "pester_name": "test_closed_issue_requires_verified_merged_pr"
+    },
+    {
+      "group": "TEST-004",
+      "id": "test_conflict_emits_resolver_input_without_publication",
+      "pester_name": "test_conflict_emits_resolver_input_without_publication"
+    },
+    {
+      "group": "TEST-008",
+      "id": "test_current_run_must_match_repository_workflow_source_and_attempt",
+      "pester_name": "test_current_run_must_match_repository_workflow_source_and_attempt"
+    },
+    {
+      "group": "TEST-008",
+      "id": "test_dry_rerun_does_not_need_history_or_mutate",
+      "pester_name": "test_dry_rerun_does_not_need_history_or_mutate"
+    },
+    {
+      "group": "TEST-006",
+      "id": "test_duplicate_and_spoofed_tracking_issues_block",
+      "pester_name": "test_duplicate_and_spoofed_tracking_issues_block"
+    },
+    {
+      "group": "TEST-002",
+      "id": "test_environment_is_strict_and_fork_owner_is_mandatory",
+      "pester_name": "test_environment_is_strict_and_fork_owner_is_mandatory"
+    },
+    {
+      "group": "TEST-011",
+      "id": "test_feedback_contains_reason_and_never_copies_source_text",
+      "pester_name": "test_feedback_contains_reason_and_never_copies_source_text"
+    },
+    {
+      "group": "TEST-003",
+      "id": "test_file_count_and_total_patch_limits",
+      "pester_name": "test_file_count_and_total_patch_limits"
+    },
+    {
+      "group": "TEST-012",
+      "id": "test_forged_patch_with_matching_artifact_digest_is_still_rejected",
+      "pester_name": "test_forged_patch_with_matching_artifact_digest_is_still_rejected"
+    },
+    {
+      "group": "TEST-004",
+      "id": "test_full_rerun_after_publication_reuses_issue_and_pr",
+      "pester_name": "test_full_rerun_after_publication_reuses_issue_and_pr"
+    },
+    {
+      "group": "TEST-011",
+      "id": "test_git_credentials_are_scoped_in_environment_only",
+      "pester_name": "test_git_credentials_are_scoped_in_environment_only"
+    },
+    {
+      "group": "TEST-010",
+      "id": "test_github_output_and_summary_are_fixed_and_single_line",
+      "pester_name": "test_github_output_and_summary_are_fixed_and_single_line"
+    },
+    {
+      "group": "TEST-008",
+      "id": "test_history_detects_count_change_and_repeated_page",
+      "pester_name": "test_history_detects_count_change_and_repeated_page"
+    },
+    {
+      "group": "TEST-008",
+      "id": "test_history_gate_blocks_any_previous_nondry_conclusion",
+      "pester_name": "test_history_gate_blocks_any_previous_nondry_conclusion"
+    },
+    {
+      "group": "TEST-008",
+      "id": "test_history_is_rechecked_after_push_before_pr_creation",
+      "pester_name": "test_history_is_rechecked_after_push_before_pr_creation"
+    },
+    {
+      "group": "TEST-008",
+      "id": "test_history_is_rechecked_before_branch_push",
+      "pester_name": "test_history_is_rechecked_before_branch_push"
+    },
+    {
+      "group": "TEST-008",
+      "id": "test_history_paginates_all_runs_including_current_and_possible_writer",
+      "pester_name": "test_history_paginates_all_runs_including_current_and_possible_writer"
+    },
+    {
+      "group": "TEST-008",
+      "id": "test_history_read_failure_blocks_creation_without_local_ambiguity",
+      "pester_name": "test_history_read_failure_blocks_creation_without_local_ambiguity"
+    },
+    {
+      "group": "TEST-008",
+      "id": "test_history_rejects_incomplete_duplicate_missing_current_and_oversize_pages",
+      "pester_name": "test_history_rejects_incomplete_duplicate_missing_current_and_oversize_pages"
+    },
+    {
+      "group": "TEST-007",
+      "id": "test_incomplete_feedback_does_not_guess_recovery_on_new_attempt",
+      "pester_name": "test_incomplete_feedback_does_not_guess_recovery_on_new_attempt"
+    },
+    {
+      "group": "TEST-006",
+      "id": "test_issue_pagination_ignores_same_title_without_marker",
+      "pester_name": "test_issue_pagination_ignores_same_title_without_marker"
+    },
+    {
+      "group": "TEST-008",
+      "id": "test_known_dry_runs_and_other_sources_allow_fresh_creation",
+      "pester_name": "test_known_dry_runs_and_other_sources_allow_fresh_creation"
+    },
+    {
+      "group": "TEST-006",
+      "id": "test_lost_create_response_can_reconcile_without_reposting",
+      "pester_name": "test_lost_create_response_can_reconcile_without_reposting"
+    },
+    {
+      "group": "TEST-007",
+      "id": "test_lost_issue_response_with_stale_listing_blocks_new_attempt_and_run",
+      "pester_name": "test_lost_issue_response_with_stale_listing_blocks_new_attempt_and_run"
+    },
+    {
+      "group": "TEST-011",
+      "id": "test_lost_pr_create_response_reuses_verified_pr",
+      "pester_name": "test_lost_pr_create_response_reuses_verified_pr"
+    },
+    {
+      "group": "TEST-007",
+      "id": "test_lost_pr_response_with_stale_listing_cannot_create_on_new_run",
+      "pester_name": "test_lost_pr_response_with_stale_listing_cannot_create_on_new_run"
+    },
+    {
+      "group": "TEST-007",
+      "id": "test_lost_source_comment_response_stale_on_rerun_never_reposts",
+      "pester_name": "test_lost_source_comment_response_stale_on_rerun_never_reposts"
+    },
+    {
+      "group": "TEST-010",
+      "id": "test_merge_commit_with_two_parents_is_rejected",
+      "pester_name": "test_merge_commit_with_two_parents_is_rejected"
+    },
+    {
+      "group": "TEST-009",
+      "id": "test_mismatched_existing_branch_and_closed_pr_block",
+      "pester_name": "test_mismatched_existing_branch_and_closed_pr_block"
+    },
+    {
+      "group": "TEST-012",
+      "id": "test_missing_target_branch_and_wrong_api_repository_fail_readonly",
+      "pester_name": "test_missing_target_branch_and_wrong_api_repository_fail_readonly"
+    },
+    {
+      "group": "TEST-001",
+      "id": "test_multi_commit_squash_copies_both_edits_with_lf_and_crlf",
+      "pester_name": "test_multi_commit_squash_copies_both_edits_with_lf_and_crlf"
+    },
+    {
+      "group": "TEST-012",
+      "id": "test_new_attempt_reconciles_existing_issue_from_old_artifact",
+      "pester_name": "test_new_attempt_reconciles_existing_issue_from_old_artifact"
+    },
+    {
+      "group": "TEST-002",
+      "id": "test_non_squash_net_diff_is_rejected",
+      "pester_name": "test_non_squash_net_diff_is_rejected"
+    },
+    {
+      "group": "TEST-003",
+      "id": "test_paths_reject_traversal_controls_backslashes_and_non_al",
+      "pester_name": "test_paths_reject_traversal_controls_backslashes_and_non_al"
+    },
+    {
+      "group": "TEST-012",
+      "id": "test_plan_file_list_cannot_be_expanded_even_with_matching_hashes",
+      "pester_name": "test_plan_file_list_cannot_be_expanded_even_with_matching_hashes"
+    },
+    {
+      "group": "TEST-001",
+      "id": "test_prove_plan_rejects_partial_source_using_exact_api_commits",
+      "pester_name": "test_prove_plan_rejects_partial_source_using_exact_api_commits"
+    },
+    {
+      "group": "TEST-001",
+      "id": "test_prove_plan_rejects_truncated_commit_list_before_git_proof",
+      "pester_name": "test_prove_plan_rejects_truncated_commit_list_before_git_proof"
+    },
+    {
+      "group": "TEST-009",
+      "id": "test_push_lease_rejects_racing_fast_forward_target_without_changes",
+      "pester_name": "test_push_lease_rejects_racing_fast_forward_target_without_changes"
+    },
+    {
+      "group": "TEST-003",
+      "id": "test_raw_entries_reject_executable_symlink_gitlink_and_control_paths",
+      "pester_name": "test_raw_entries_reject_executable_symlink_gitlink_and_control_paths"
+    },
+    {
+      "group": "TEST-008",
+      "id": "test_rerun_attempt_blocks_creation_even_without_older_run_entries",
+      "pester_name": "test_rerun_attempt_blocks_creation_even_without_older_run_entries"
+    },
+    {
+      "group": "TEST-002",
+      "id": "test_rerun_triggering_actor_must_also_be_allowlisted",
+      "pester_name": "test_rerun_triggering_actor_must_also_be_allowlisted"
+    },
+    {
+      "group": "TEST-005",
+      "id": "test_result_and_patch_tampering_fail_closed",
+      "pester_name": "test_result_and_patch_tampering_fail_closed"
+    },
+    {
+      "group": "TEST-012",
+      "id": "test_run_scoped_ambiguity_cannot_be_erased_by_prepare",
+      "pester_name": "test_run_scoped_ambiguity_cannot_be_erased_by_prepare"
+    },
+    {
+      "group": "TEST-001",
+      "id": "test_single_commit_source_equal_to_head_is_complete",
+      "pester_name": "test_single_commit_source_equal_to_head_is_complete"
+    },
+    {
+      "group": "TEST-003",
+      "id": "test_size_limits_and_binary_blobs_are_rejected",
+      "pester_name": "test_size_limits_and_binary_blobs_are_rejected"
+    },
+    {
+      "group": "TEST-005",
+      "id": "test_source_or_triggering_actor_changes_are_rechecked_before_writes",
+      "pester_name": "test_source_or_triggering_actor_changes_are_rechecked_before_writes"
+    },
+    {
+      "group": "TEST-002",
+      "id": "test_source_repository_merge_base_and_metadata_are_checked",
+      "pester_name": "test_source_repository_merge_base_and_metadata_are_checked"
+    },
+    {
+      "group": "TEST-001",
+      "id": "test_squash_parent_cannot_already_contain_a_pr_commit",
+      "pester_name": "test_squash_parent_cannot_already_contain_a_pr_commit"
+    },
+    {
+      "group": "TEST-011",
+      "id": "test_successful_write_with_wrong_readback_is_rejected",
+      "pester_name": "test_successful_write_with_wrong_readback_is_rejected"
+    },
+    {
+      "group": "TEST-010",
+      "id": "test_summary_keeps_markdown_filenames_in_escaped_literal_block",
+      "pester_name": "test_summary_keeps_markdown_filenames_in_escaped_literal_block"
+    },
+    {
+      "group": "TEST-010",
+      "id": "test_summary_rejects_invalid_plan_fields_without_writing",
+      "pester_name": "test_summary_rejects_invalid_plan_fields_without_writing"
+    },
+    {
+      "group": "TEST-005",
+      "id": "test_target_advance_has_no_branch_or_pr_write",
+      "pester_name": "test_target_advance_has_no_branch_or_pr_write"
+    },
+    {
+      "group": "TEST-001",
+      "id": "test_two_commit_fast_forward_cannot_drop_first_same_file_edit",
+      "pester_name": "test_two_commit_fast_forward_cannot_drop_first_same_file_edit"
+    },
+    {
+      "group": "TEST-001",
+      "id": "test_two_commit_rebase_cannot_drop_first_same_file_edit",
+      "pester_name": "test_two_commit_rebase_cannot_drop_first_same_file_edit"
+    },
+    {
+      "group": "TEST-008",
+      "id": "test_unknown_or_wrong_scope_history_never_grants_creation",
+      "pester_name": "test_unknown_or_wrong_scope_history_never_grants_creation"
+    }
+  ],
+  "workflow_baseline": {
+    "scope": "Offline baseline only; PowerShell cutover and hosted parsing/dispatch remain separately approval-gated.",
+    "production": {
+      "path": ".github/workflows/backport-demo.yml",
+      "sha256_lf": "ea06994495c62db9a9fd14802fbbd273b762be938588028ed8d8057d9ec2a9fb",
+      "protected_blocks": [
+        "name: Backport to 29.x\nrun-name: Backport PR ${{ inputs.source_pr }} to 29.x (dry run = ${{ inputs.dry_run }})\n",
+        "on:\n  workflow_dispatch:\n    inputs:\n      source_pr:\n        description: Merged source PR number in this test fork\n        required: true\n        type: string\n      dry_run:\n        description: Preview without creating or changing repository objects\n        required: true\n        default: true\n        type: boolean\n",
+        "permissions: {}\n\nconcurrency:\n  group: backport-demo-${{ github.repository_id }}-${{ inputs.source_pr }}-29\n  cancel-in-progress: false\n",
+        "  INPUT_SOURCE_PR: ${{ inputs.source_pr }}\n  INPUT_DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}\n  ALLOWED_ACTOR_IDS: ${{ vars.BACKPORT_ALLOWED_ACTOR_IDS || '59250993' }}\n",
+        "  validate:\n    if: github.repository == 'AleksanderGladkov/BCApps-Backport-Test' && github.repository_id == '1369849596' && github.ref == 'refs/heads/main'\n    runs-on: ubuntu-latest\n    timeout-minutes: 20\n    permissions:\n      contents: read\n      pull-requests: read\n",
+        "  track:\n    needs: validate\n    runs-on: ubuntu-latest\n    timeout-minutes: 15\n    permissions:\n      actions: read\n      contents: read\n      pull-requests: read\n      issues: write\n",
+        "  prepare:\n    needs: track\n    runs-on: ubuntu-latest\n    timeout-minutes: 20\n    permissions:\n      contents: read\n      pull-requests: read\n      issues: read\n",
+        "  publish:\n    needs: prepare\n    runs-on: ubuntu-latest\n    timeout-minutes: 20\n    permissions:\n      actions: read\n      contents: write\n      issues: write\n      pull-requests: write\n",
+        "      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4\n        with:\n          ref: ${{ github.sha }}\n          persist-credentials: false\n          sparse-checkout: .github/scripts/backport-demo\n",
+        "      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4\n        if: always()\n        with:\n          name: backport-plan-${{ github.run_attempt }}\n          path: ${{ runner.temp }}/backport-state\n          if-no-files-found: ignore\n          retention-days: 7\n",
+        "      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4\n        with:\n          name: backport-plan-${{ github.run_attempt }}\n          path: ${{ runner.temp }}/backport-state\n",
+        "      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4\n        if: always()\n        with:\n          name: backport-tracking-${{ github.run_attempt }}\n          path: ${{ runner.temp }}/backport-state\n          if-no-files-found: error\n          retention-days: 7\n",
+        "      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4\n        with:\n          name: backport-tracking-${{ github.run_attempt }}\n          path: ${{ runner.temp }}/backport-state\n",
+        "      - name: Save clean result or Milica's conflict handoff\n        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4\n        if: always()\n        with:\n          name: backport-result-${{ github.run_attempt }}\n          path: ${{ runner.temp }}/backport-state\n          if-no-files-found: error\n          retention-days: 7\n",
+        "      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4\n        with:\n          name: backport-result-${{ github.run_attempt }}\n          path: ${{ runner.temp }}/backport-state\n",
+        "      - name: Preserve publication and recovery evidence, including failures\n        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4\n        if: always()\n        with:\n          name: backport-publication-${{ github.run_attempt }}\n          path: ${{ runner.temp }}/backport-state\n          if-no-files-found: error\n          retention-days: 7\n"
+      ]
+    },
+    "tests": {
+      "path": ".github/workflows/backport-demo-tests.yml",
+      "sha256_lf": "2dbcc9f5ab13aa7d621852eed58cf6c83dd1200c5ce5dce5006c0de6dcff7af2",
+      "protected_blocks": [
+        "name: Backport executor tests\n",
+        "on:\n  workflow_dispatch:\n",
+        "permissions:\n  contents: read\n",
+        "      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4\n        with:\n          ref: ${{ github.sha }}\n          persist-credentials: false\n          sparse-checkout: .github/scripts/backport-demo\n"
+      ]
+    }
+  },
+  "capture": {
+    "TEST-021": {
+      "failed": 0,
+      "passed": 4,
+      "skipped": 0
+    },
+    "automation_matches_baseline": true,
+    "baseline_suite": {
+      "failed": 0,
+      "passed": 67,
+      "seconds": 478.558,
+      "skipped": 0
+    },
+    "date": "2026-09-14",
+    "inspected_main": "9d44122e00089c6c5d4fb83d760ca574263ee6d1",
+    "platform": "Windows",
+    "protected_paths": {
+      "count": 141,
+      "receipt_sha256": "4fff56b541eed64b6ed763177f1d7c1c0ed5bb5f6dacbf9f77df9cf3515f7067",
+      "scope": "Source, installed, legacy and previously recorded reference copies; private path manifest is not distributed.",
+      "unchanged": true
+    },
+    "python_version": "3.13.15",
+    "scope": "Historical baseline receipt, not the result of the current exporter invocation or PowerShell acceptance.",
+    "unicode_version": "15.1.0"
+  },
+  "correspondence": [
+    {
+      "decision": "Exact source, target and actor revalidation; dispatch authorization is not interactive aggregate approval.",
+      "disposition": "retained",
+      "id": "MAP-001"
+    },
+    {
+      "decision": "Independent temporary repositories protect callers; persistent worktree recovery is not supported.",
+      "disposition": "adapted",
+      "id": "MAP-002"
+    },
+    {
+      "decision": "Verified squash cherry-pick and independent reconstruction; legitimate smaller deltas require exact final content.",
+      "disposition": "adapted",
+      "id": "MAP-003"
+    },
+    {
+      "decision": "Reconcile exact bot-owned objects; journals, fresh history and create-only branch leases prohibit blind recreation.",
+      "disposition": "retained",
+      "id": "MAP-004"
+    },
+    {
+      "decision": "Keep the executor conflict handoff and stop publication; no resolver invocation or schema adapter.",
+      "disposition": "deferred",
+      "id": "MAP-005"
+    },
+    {
+      "decision": "Read back branches and PRs; preparation published=false is not a final receipt. A separate receipt is deferred.",
+      "disposition": "adapted",
+      "id": "MAP-006"
+    },
+    {
+      "decision": "Independent public-safe synthetic fixtures supplement, not replace, the 67 baseline cases.",
+      "disposition": "adapted",
+      "id": "MAP-007"
+    },
+    {
+      "decision": "One source and one target; no reviewer policy, branch-only mode, bulk coordination or translation.",
+      "disposition": "retained",
+      "id": "MAP-008"
+    }
+  ],
+  "helper_dispositions": [
+    {
+      "decision": "Raw byte streams and argument lists inform independent fork-local bounded transport.",
+      "disposition": "adapted",
+      "id": "byte-safe-blob"
+    },
+    {
+      "decision": "Sorted keys and atomic writes retained; Python escaping, types and exact bytes remain authoritative.",
+      "disposition": "adapted",
+      "id": "canonical-atomic-json"
+    },
+    {
+      "decision": "Recompute content before publication; legitimate subset deltas differ from exact changed-path manifests.",
+      "disposition": "adapted",
+      "id": "result-before-pr"
+    },
+    {
+      "decision": "Verify branch/base/head with fixed-scope HTTP and create-only publication; no work-item or CLI transport.",
+      "disposition": "adapted",
+      "id": "github-readback"
+    },
+    {
+      "decision": "Keep existing remote verification and journal evidence; introduce no new result schema.",
+      "disposition": "deferred",
+      "id": "publication-receipt"
+    }
+  ],
+  "required_migration_ids": [
+    "TEST-013",
+    "TEST-014",
+    "TEST-015",
+    "TEST-016",
+    "TEST-017",
+    "TEST-018",
+    "TEST-019",
+    "TEST-020",
+    "TEST-021",
+    "TEST-022",
+    "TEST-023",
+    "TEST-024"
+  ],
+  "schema": 1,
+  "shared_safety": {
+    "TEST-021": {
+      "baseline_cases": [
+        "test_021_both_fixes_present_is_verified_noop",
+        "test_021_missing_effect_with_rehashed_artifacts_is_rejected",
+        "test_021_partial_fix_preserves_exact_final_content",
+        "test_021_unrelated_effect_with_rehashed_artifacts_is_rejected"
+      ],
+      "observed": "Partial fix publishes only the missing effect; complete fix is a no-op; rehashed missing/extra effects are rejected."
+    },
+    "TEST-022": {
+      "scope": "Dirty caller and unrelated working-directory isolation"
+    },
+    "TEST-023": {
+      "scope": "Exact fork conflict handoff; no skill import or resolver"
+    },
+    "TEST-024": {
+      "scope": "Fresh remote read-back and retained publication journals"
+    }
+  },
+  "surrogate_vectors": [
+    {
+      "id": "unpaired-high",
+      "sha256": "8c0c59dd0d275aadcd462a5fe12eb352cbdfeaf961eae4f85a4660521df7d2f5",
+      "utf16_code_units": [
+        55296
+      ],
+      "utf8_hex": "225c756438303022"
+    },
+    {
+      "id": "unpaired-low",
+      "sha256": "aa68369aff102de57c3da5ad0dd5c24149f811b4afcd13c55f2da895bd15c782",
+      "utf16_code_units": [
+        57343
+      ],
+      "utf8_hex": "225c756466666622"
+    }
+  ],
+  "vectors": [
+    {
+      "id": "conflict",
+      "sha256": "96cea5311f969c64ae96c7340e9a798663c646f7a6e7f81af94c181170fb1c3e",
+      "utf8_hex": "7b2266696c6573223a5b7b226162736f6c7574655f70617468223a222f73796e7468657469632f776f726b2f7265706f2f7372632f6f6e652e616c222c2272656c61746976655f70617468223a227372632f6f6e652e616c227d5d2c227265706f223a22416c656b73616e646572476c61646b6f762f4243417070732d4261636b706f72742d54657374222c22736f757263655f7072223a372c22736f757263655f736861223a2231313131313131313131313131313131313131313131313131313131313131313131313131313131222c227461726765745f626173655f736861223a2233333333333333333333333333333333333333333333333333333333333333333333333333333333222c22776f726b74726565223a222f73796e7468657469632f776f726b2f7265706f227d",
+      "value": {
+        "files": [
+          {
+            "absolute_path": "/synthetic/work/repo/src/one.al",
+            "relative_path": "src/one.al"
+          }
+        ],
+        "repo": "AleksanderGladkov/BCApps-Backport-Test",
+        "source_pr": 7,
+        "source_sha": "1111111111111111111111111111111111111111",
+        "target_base_sha": "3333333333333333333333333333333333333333",
+        "worktree": "/synthetic/work/repo"
+      }
+    },
+    {
+      "id": "empty-and-singleton",
+      "sha256": "f9e88104c245910f56f4cf18f5597d08012202565e20417f3d19abcfc57ad09b",
+      "utf8_hex": "7b22656d707479223a5b5d2c226d616e79223a5b66616c73652c302c22222c7b7d5d2c226f6e65223a5b6e756c6c5d7d",
+      "value": {
+        "empty": [],
+        "many": [
+          false,
+          0,
+          "",
+          {}
+        ],
+        "one": [
+          null
+        ]
+      }
+    },
+    {
+      "id": "escaping",
+      "sha256": "3aa82d23c3dae9848966470180df11284ba57e33f6fcaf874eb1f98beba0170e",
+      "utf8_hex": "7b2274657874223a225c225c5c5c625c665c6e5c725c745c75303030302f3c3e26275c75303064665c75303361335c75643833645c7564653030227d",
+      "value": {
+        "text": "\"\\\b\f\n\r\t\u0000/<>&'\u00df\u03a3\ud83d\ude00"
+      }
+    },
+    {
+      "id": "feedback-body",
+      "sha256": "826d37b2ac56bdfb92bc0fa8a2dca3b0a249e6d0ce4fabd95c42c5f7402d89d7",
+      "utf8_hex": "223c212d2d2062632d6261636b706f72743a76313a313336393834393539363a373a313131313131313131313131313131313131313131313131313131313131313131313131313131313a3239202d2d3e5c6e3c212d2d2062632d6261636b706f72742d737461747573202d2d3e5c6e4261636b706f727420233720746f2032392e783a2070722d637265617465642e5c6e68747470733a2f2f6769746875622e636f6d2f416c656b73616e646572476c61646b6f762f4243417070732d4261636b706f72742d546573742f70756c6c2f31303222",
+      "value": "<!-- bc-backport:v1:1369849596:7:1111111111111111111111111111111111111111:29 -->\n<!-- bc-backport-status -->\nBackport #7 to 29.x: pr-created.\nhttps://github.com/AleksanderGladkov/BCApps-Backport-Test/pull/102"
+    },
+    {
+      "id": "issue-body",
+      "sha256": "381e1c74789b3dbb05e6fd45246127b23da2d5b9deaaa9ff979332c2c8e050e1",
+      "utf8_hex": "22536f757263653a2068747470733a2f2f6769746875622e636f6d2f416c656b73616e646572476c61646b6f762f4243417070732d4261636b706f72742d546573742f70756c6c2f375c6e536f75726365205348413a20313131313131313131313131313131313131313131313131313131313131313131313131313131315c6e5c6e3c212d2d2062632d6261636b706f72743a76313a313336393834393539363a373a313131313131313131313131313131313131313131313131313131313131313131313131313131313a3239202d2d3e22",
+      "value": "Source: https://github.com/AleksanderGladkov/BCApps-Backport-Test/pull/7\nSource SHA: 1111111111111111111111111111111111111111\n\n<!-- bc-backport:v1:1369849596:7:1111111111111111111111111111111111111111:29 -->"
+    },
+    {
+      "id": "marker",
+      "sha256": "394a6cea2b29f99c4cf5fa2bb7338fcbe339479580b51ddca7c29a64e4b81489",
+      "utf8_hex": "223c212d2d2062632d6261636b706f72743a76313a313336393834393539363a373a313131313131313131313131313131313131313131313131313131313131313131313131313131313a3239202d2d3e22",
+      "value": "<!-- bc-backport:v1:1369849596:7:1111111111111111111111111111111111111111:29 -->"
+    },
+    {
+      "id": "plan",
+      "sha256": "5df223c8817a4285a2ccb45921f9a29cad36f92da7ae5c367690ad0a711aedfb",
+      "utf8_hex": "7b22636f6d6d697473223a5b2232323232323232323232323232323232323232323232323232323232323232323232323232323232225d2c226472795f72756e223a66616c73652c2266696c6573223a5b227372632f6f6e652e616c222c227372632f5c75303361332e616c225d2c227265706f7369746f7279223a22416c656b73616e646572476c61646b6f762f4243417070732d4261636b706f72742d54657374222c227265706f7369746f72795f6964223a313336393834393539362c2272756e5f617474656d7074223a2231222c2272756e5f6964223a22313233222c22736368656d61223a312c22736f757263655f686561645f736861223a2232323232323232323232323232323232323232323232323232323232323232323232323232323232222c22736f757263655f7072223a372c22736f757263655f736861223a2231313131313131313131313131313131313131313131313131313131313131313131313131313131222c227461726765745f626173655f736861223a2233333333333333333333333333333333333333333333333333333333333333333333333333333333222c227461726765745f726566223a2272656c65617365732f32392e78227d",
+      "value": {
+        "commits": [
+          "2222222222222222222222222222222222222222"
+        ],
+        "dry_run": false,
+        "files": [
+          "src/one.al",
+          "src/\u03a3.al"
+        ],
+        "repository": "AleksanderGladkov/BCApps-Backport-Test",
+        "repository_id": 1369849596,
+        "run_attempt": "1",
+        "run_id": "123",
+        "schema": 1,
+        "source_head_sha": "2222222222222222222222222222222222222222",
+        "source_pr": 7,
+        "source_sha": "1111111111111111111111111111111111111111",
+        "target_base_sha": "3333333333333333333333333333333333333333",
+        "target_ref": "releases/29.x"
+      }
+    },
+    {
+      "id": "pr-body",
+      "sha256": "cc7d5b4713e896a4ba22d90bd478f47bb82a278ba1c40d8e22656b917b5b8fa4",
+      "utf8_hex": "224261636b706f7274206f662023375c6e466978657320233130315c6e5c6e3c212d2d2062632d6261636b706f72743a76313a313336393834393539363a373a313131313131313131313131313131313131313131313131313131313131313131313131313131313a3239202d2d3e5c6e536f75726365205348413a20313131313131313131313131313131313131313131313131313131313131313131313131313131315c6e54617267657420626173653a20333333333333333333333333333333333333333333333333333333333333333333333333333333335c6e4170706c69656420747265653a203535353535353535353535353535353535353535353535353535353535353535353535353535353522",
+      "value": "Backport of #7\nFixes #101\n\n<!-- bc-backport:v1:1369849596:7:1111111111111111111111111111111111111111:29 -->\nSource SHA: 1111111111111111111111111111111111111111\nTarget base: 3333333333333333333333333333333333333333\nApplied tree: 5555555555555555555555555555555555555555"
+    },
+    {
+      "id": "publication",
+      "sha256": "ee973b8fb078ffca278c6ce4188bdb9c52d8233a787770fd3e7fd2993980869a",
+      "utf8_hex": "7b22617474656d70746564223a5b2270757368222c227072225d2c226472795f72756e223a66616c73652c22706c616e5f68617368223a2235646632323363383831376134323835613263636234353932316639613239636164333666393264613761653563333637363930616430613731316165646662222c227265706f7369746f7279223a22416c656b73616e646572476c61646b6f762f4243417070732d4261636b706f72742d54657374222c227265706f7369746f72795f6964223a313336393834393539362c2272756e5f617474656d7074223a2231222c2272756e5f6964223a22313233222c22736368656d61223a312c22736f757263655f7072223a377d",
+      "value": {
+        "attempted": [
+          "push",
+          "pr"
+        ],
+        "dry_run": false,
+        "plan_hash": "5df223c8817a4285a2ccb45921f9a29cad36f92da7ae5c367690ad0a711aedfb",
+        "repository": "AleksanderGladkov/BCApps-Backport-Test",
+        "repository_id": 1369849596,
+        "run_attempt": "1",
+        "run_id": "123",
+        "schema": 1,
+        "source_pr": 7
+      }
+    },
+    {
+      "id": "result-applied",
+      "sha256": "62d875165ee108910625f17bd868a788406e894e3bfe846e75df94ac28b48993",
+      "utf8_hex": "7b22636f6d6d69745f736861223a2234343434343434343434343434343434343434343434343434343434343434343434343434343434222c226472795f72756e223a66616c73652c2270617463685f736861323536223a2232613664396238346638363466353030376432633063653961643530613436653766646264356332373630663563653535636332326138303932363832366661222c22706c616e5f68617368223a2235646632323363383831376134323835613263636234353932316639613239636164333666393264613761653563333637363930616430613731316165646662222c227075626c6973686564223a66616c73652c22726561736f6e223a22636c65616e5f6368657272795f7069636b222c227265706f7369746f7279223a22416c656b73616e646572476c61646b6f762f4243417070732d4261636b706f72742d54657374222c227265706f7369746f72795f6964223a313336393834393539362c2272756e5f617474656d7074223a2231222c2272756e5f6964223a22313233222c22736368656d61223a312c22736f757263655f7072223a372c22737461747573223a226170706c696564222c22747265655f736861223a2235353535353535353535353535353535353535353535353535353535353535353535353535353535227d",
+      "value": {
+        "commit_sha": "4444444444444444444444444444444444444444",
+        "dry_run": false,
+        "patch_sha256": "2a6d9b84f864f5007d2c0ce9ad50a46e7fdbd5c2760f5ce55cc22a80926826fa",
+        "plan_hash": "5df223c8817a4285a2ccb45921f9a29cad36f92da7ae5c367690ad0a711aedfb",
+        "published": false,
+        "reason": "clean_cherry_pick",
+        "repository": "AleksanderGladkov/BCApps-Backport-Test",
+        "repository_id": 1369849596,
+        "run_attempt": "1",
+        "run_id": "123",
+        "schema": 1,
+        "source_pr": 7,
+        "status": "applied",
+        "tree_sha": "5555555555555555555555555555555555555555"
+      }
+    },
+    {
+      "id": "result-conflict",
+      "sha256": "4fb33839ba5ab7fc752f56812b2a848a6a1f9a039fa65cc1a5189bf5f1a2355b",
+      "utf8_hex": "7b22636f6d6d69745f736861223a6e756c6c2c226472795f72756e223a66616c73652c2270617463685f736861323536223a2265336230633434323938666331633134396166626634633839393666623932343237616534316534363439623933346361343935393931623738353262383535222c22706c616e5f68617368223a2235646632323363383831376134323835613263636234353932316639613239636164333666393264613761653563333637363930616430613731316165646662222c227075626c6973686564223a66616c73652c22726561736f6e223a226368657272795f7069636b5f636f6e666c696374222c227265706f7369746f7279223a22416c656b73616e646572476c61646b6f762f4243417070732d4261636b706f72742d54657374222c227265706f7369746f72795f6964223a313336393834393539362c2272756e5f617474656d7074223a2231222c2272756e5f6964223a22313233222c22736368656d61223a312c22736f757263655f7072223a372c22737461747573223a226e656564732d617474656e74696f6e222c22747265655f736861223a6e756c6c7d",
+      "value": {
+        "commit_sha": null,
+        "dry_run": false,
+        "patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "plan_hash": "5df223c8817a4285a2ccb45921f9a29cad36f92da7ae5c367690ad0a711aedfb",
+        "published": false,
+        "reason": "cherry_pick_conflict",
+        "repository": "AleksanderGladkov/BCApps-Backport-Test",
+        "repository_id": 1369849596,
+        "run_attempt": "1",
+        "run_id": "123",
+        "schema": 1,
+        "source_pr": 7,
+        "status": "needs-attention",
+        "tree_sha": null
+      }
+    },
+    {
+      "id": "result-noop",
+      "sha256": "1ee34803ce7d22008c968742f7d7b1e3c20d45b4b6081e11db36f383346a2ddd",
+      "utf8_hex": "7b22636f6d6d69745f736861223a6e756c6c2c226472795f72756e223a66616c73652c2270617463685f736861323536223a2265336230633434323938666331633134396166626634633839393666623932343237616534316534363439623933346361343935393931623738353262383535222c22706c616e5f68617368223a2235646632323363383831376134323835613263636234353932316639613239636164333666393264613761653563333637363930616430613731316165646662222c227075626c6973686564223a66616c73652c22726561736f6e223a22726576657273655f70617463685f70726f76656e222c227265706f7369746f7279223a22416c656b73616e646572476c61646b6f762f4243417070732d4261636b706f72742d54657374222c227265706f7369746f72795f6964223a313336393834393539362c2272756e5f617474656d7074223a2231222c2272756e5f6964223a22313233222c22736368656d61223a312c22736f757263655f7072223a372c22737461747573223a22616c72656164795f6170706c696564222c22747265655f736861223a6e756c6c7d",
+      "value": {
+        "commit_sha": null,
+        "dry_run": false,
+        "patch_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "plan_hash": "5df223c8817a4285a2ccb45921f9a29cad36f92da7ae5c367690ad0a711aedfb",
+        "published": false,
+        "reason": "reverse_patch_proven",
+        "repository": "AleksanderGladkov/BCApps-Backport-Test",
+        "repository_id": 1369849596,
+        "run_attempt": "1",
+        "run_id": "123",
+        "schema": 1,
+        "source_pr": 7,
+        "status": "already_applied",
+        "tree_sha": null
+      }
+    },
+    {
+      "id": "tracking-ambiguous",
+      "sha256": "a80a5d6e729cba05de4c0ce492f2e075a1a22aac517ca09f5ce148d7d583be37",
+      "utf8_hex": "7b226472795f72756e223a66616c73652c2269737375655f6964223a6e756c6c2c2269737375655f6e756d626572223a6e756c6c2c2269737375655f75726c223a6e756c6c2c22706c616e5f68617368223a2235646632323363383831376134323835613263636234353932316639613239636164333666393264613761653563333637363930616430613731316165646662222c227265706f7369746f7279223a22416c656b73616e646572476c61646b6f762f4243417070732d4261636b706f72742d54657374222c227265706f7369746f72795f6964223a313336393834393539362c2272756e5f617474656d7074223a2231222c2272756e5f6964223a22313233222c22736368656d61223a312c22736f757263655f7072223a372c22737461747573223a22616d626967756f7573227d",
+      "value": {
+        "dry_run": false,
+        "issue_id": null,
+        "issue_number": null,
+        "issue_url": null,
+        "plan_hash": "5df223c8817a4285a2ccb45921f9a29cad36f92da7ae5c367690ad0a711aedfb",
+        "repository": "AleksanderGladkov/BCApps-Backport-Test",
+        "repository_id": 1369849596,
+        "run_attempt": "1",
+        "run_id": "123",
+        "schema": 1,
+        "source_pr": 7,
+        "status": "ambiguous"
+      }
+    },
+    {
+      "id": "tracking-dry",
+      "sha256": "e92ce9af1511952888330181ace3acb7e2e6199dddd00992b966046c07cae917",
+      "utf8_hex": "7b226472795f72756e223a66616c73652c2269737375655f6964223a6e756c6c2c2269737375655f6e756d626572223a6e756c6c2c2269737375655f75726c223a6e756c6c2c22706c616e5f68617368223a2235646632323363383831376134323835613263636234353932316639613239636164333666393264613761653563333637363930616430613731316165646662222c227265706f7369746f7279223a22416c656b73616e646572476c61646b6f762f4243417070732d4261636b706f72742d54657374222c227265706f7369746f72795f6964223a313336393834393539362c2272756e5f617474656d7074223a2231222c2272756e5f6964223a22313233222c22736368656d61223a312c22736f757263655f7072223a372c22737461747573223a226472792d72756e227d",
+      "value": {
+        "dry_run": false,
+        "issue_id": null,
+        "issue_number": null,
+        "issue_url": null,
+        "plan_hash": "5df223c8817a4285a2ccb45921f9a29cad36f92da7ae5c367690ad0a711aedfb",
+        "repository": "AleksanderGladkov/BCApps-Backport-Test",
+        "repository_id": 1369849596,
+        "run_attempt": "1",
+        "run_id": "123",
+        "schema": 1,
+        "source_pr": 7,
+        "status": "dry-run"
+      }
+    },
+    {
+      "id": "tracking-tracked",
+      "sha256": "0aa9f2be11bf8317cfca1c11a1c47c6bbb9a7b24dc2b28db395b54e938ec2b6a",
+      "utf8_hex": "7b226472795f72756e223a66616c73652c2269737375655f6964223a313030312c2269737375655f6e756d626572223a3130312c2269737375655f75726c223a2268747470733a2f2f6769746875622e636f6d2f416c656b73616e646572476c61646b6f762f4243417070732d4261636b706f72742d546573742f6973737565732f313031222c22706c616e5f68617368223a2235646632323363383831376134323835613263636234353932316639613239636164333666393264613761653563333637363930616430613731316165646662222c227265706f7369746f7279223a22416c656b73616e646572476c61646b6f762f4243417070732d4261636b706f72742d54657374222c227265706f7369746f72795f6964223a313336393834393539362c2272756e5f617474656d7074223a2231222c2272756e5f6964223a22313233222c22736368656d61223a312c22736f757263655f7072223a372c22737461747573223a22747261636b6564227d",
+      "value": {
+        "dry_run": false,
+        "issue_id": 1001,
+        "issue_number": 101,
+        "issue_url": "https://github.com/AleksanderGladkov/BCApps-Backport-Test/issues/101",
+        "plan_hash": "5df223c8817a4285a2ccb45921f9a29cad36f92da7ae5c367690ad0a711aedfb",
+        "repository": "AleksanderGladkov/BCApps-Backport-Test",
+        "repository_id": 1369849596,
+        "run_attempt": "1",
+        "run_id": "123",
+        "schema": 1,
+        "source_pr": 7,
+        "status": "tracked"
+      }
+    },
+    {
+      "id": "types-and-order",
+      "sha256": "bf6dbb6b883e27d39698513c03c7be0a4fc7723e0baec5c214e2a4d7d271ee44",
+      "utf8_hex": "7b2241223a747275652c2261223a302c22696e7465676572223a39393939393939393939393939393939393939392c226e65676174697665223a2d312c226e756c6c223a6e756c6c2c22737472696e67223a223939393939393939393939393939393939393939222c225c7565303030223a322c225c75643830305c7564633030223a317d",
+      "value": {
+        "A": true,
+        "a": 0,
+        "integer": 99999999999999999999,
+        "negative": -1,
+        "null": null,
+        "string": "99999999999999999999",
+        "\ue000": 2,
+        "\ud800\udc00": 1
+      }
+    }
+  ],
+  "verification": {
+    "generate": "python -B Export-PythonBaseline.py --baseline-dir <pinned-oracle-directory> --generate",
+    "python": "3.13",
+    "reference_tests": "python -B Export-PythonBaseline.py --baseline-dir <pinned-oracle-directory> --self-test",
+    "scope": "Reference data and baseline observations only, not PowerShell acceptance.",
+    "shared_safety": "python -B Export-PythonBaseline.py --baseline-dir <pinned-oracle-directory> --safety",
+    "unchanged_suite": "python -B Export-PythonBaseline.py --baseline-dir <pinned-oracle-directory> --baseline-tests",
+    "unicode": "15.1.0",
+    "verify": "python -B Export-PythonBaseline.py --baseline-dir <pinned-oracle-directory> --verify"
+  }
+}
