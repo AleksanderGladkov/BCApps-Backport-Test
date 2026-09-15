@@ -1,0 +1,84 @@
+name: Copilot authentication smoke test
+
+on:
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: copilot-auth-smoke-${{ github.repository_id }}
+  cancel-in-progress: false
+
+jobs:
+  smoke:
+    if: github.repository == 'AleksanderGladkov/BCApps-Backport-Test' && github.repository_id == '1369849596'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      copilot-requests: write
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - name: Require the fork owner and main
+        run: |
+          if ($env:GITHUB_REF -cne 'refs/heads/main' -or
+              $env:GITHUB_ACTOR_ID -cne '59250993' -or
+              $env:GITHUB_TRIGGERING_ACTOR -cne 'AleksanderGladkov') {
+            throw 'Only the fork owner may dispatch or rerun this smoke test from main.'
+          }
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: '24'
+
+      - name: Install the pinned Copilot CLI
+        run: |
+          npm install --global @github/copilot@1.0.83 --no-audit --no-fund
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Copilot CLI installation failed.'
+          }
+          copilot --version
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Copilot CLI could not start.'
+          }
+
+      - name: Verify one tool-free Copilot response
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          COPILOT_HOME: ${{ runner.temp }}/copilot-auth-home
+        run: |
+          $workDirectory = Join-Path $env:RUNNER_TEMP 'copilot-auth-smoke'
+          New-Item -ItemType Directory -Path $workDirectory -ErrorAction Stop | Out-Null
+          Set-Location -LiteralPath $workDirectory
+          $arguments = @(
+            '--prompt', 'Reply with exactly COPILOT_ACTIONS_AUTH_OK and nothing else. Do not use any tools.'
+            '--silent'
+            '--stream', 'off'
+            '--no-auto-update'
+            '--no-custom-instructions'
+            '--disable-builtin-mcps'
+            '--deny-tool', '*'
+            '--available-tools'
+          )
+          $response = & copilot @arguments
+          if ($LASTEXITCODE -ne 0) {
+            throw 'Copilot authentication or inference failed. See the CLI error above.'
+          }
+          if (($response -join "`n").Trim() -cne 'COPILOT_ACTIONS_AUTH_OK') {
+            throw 'Copilot did not return the exact expected smoke-test response.'
+          }
+          Write-Host 'COPILOT_ACTIONS_AUTH_OK'
+          @(
+            '## Copilot authentication smoke test'
+            ''
+            '- Result: COPILOT_ACTIONS_AUTH_OK'
+            '- CLI: @github/copilot@1.0.83'
+            '- Authentication: built-in Actions GITHUB_TOKEN'
+            '- Agent tools: none; built-in MCP servers disabled'
+            '- Repository code: not checked out'
+            '- App keys, PATs, and repository publication permissions: not used'
+            ''
+            'This proves a minimal Copilot request works, not backport conflict resolution.'
+          ) | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
