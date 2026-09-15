@@ -3317,6 +3317,19 @@ public sealed class BackportStdinCloseFaultStream : System.IO.MemoryStream
     }
 
     It 'uses a private 180 second deadline and kills only its owned process tree on expiry' {
+        $assertOwnedProcessExited = {
+            param([Diagnostics.Process]$OwnedProcess)
+            $OwnedProcess.WaitForExit(5000) | Should -BeTrue
+            $OwnedProcess.HasExited | Should -BeTrue
+        }
+        $exitedInfo = New-BackportProcessFixtureStartInfo $script:IoProcess @('exit', '0')
+        $exitedProcess = [Diagnostics.Process]::Start($exitedInfo)
+        try {
+            $exitedProcess.WaitForExit(5000) | Should -BeTrue
+            $exitedProcess.HasExited | Should -BeTrue
+            & $assertOwnedProcessExited $exitedProcess
+        }
+        finally { $exitedProcess.Dispose() }
         $pidFile = Join-Path $script:IoProcess.Root 'parent.pid'
         $childFile = Join-Path $script:IoProcess.Root 'child.pid'
         $info = New-BackportProcessFixtureStartInfo $script:IoProcess @('tree', $pidFile, $childFile)
@@ -3332,19 +3345,10 @@ public sealed class BackportStdinCloseFaultStream : System.IO.MemoryStream
                 Test-Path -LiteralPath $path | Should -BeTrue
                 $ownedPid = [int][IO.File]::ReadAllText($path)
                 $ownedProcess = Get-Process -Id $ownedPid -ErrorAction SilentlyContinue
-                if ($IsLinux -and $ownedProcess) {
-                    $role = if ($path -eq $pidFile) { 'parent' } else { 'child' }
-                    $state = 'unavailable'
-                    try {
-                        $status = [IO.File]::ReadAllText("/proc/$ownedPid/status")
-                        $match = [regex]::Match($status, '(?m)^State:\s+([RSDZTtXxKWPIN])\s')
-                        if ($match.Success) { $state = $match.Groups[1].Value }
-                    }
-                    catch [IO.IOException] { $state = 'unavailable' }
-                    catch [UnauthorizedAccessException] { $state = 'unavailable' }
-                    Write-Host "owned-process-state role=$role state=$state"
+                if ($null -ne $ownedProcess) {
+                    try { & $assertOwnedProcessExited $ownedProcess }
+                    finally { $ownedProcess.Dispose() }
                 }
-                $ownedProcess | Should -BeNullOrEmpty
             }
             Get-Process -Id $PID | Should -Not -BeNullOrEmpty
         }
