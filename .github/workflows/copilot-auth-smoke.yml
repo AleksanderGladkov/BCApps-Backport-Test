@@ -39,7 +39,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) {
             throw 'Copilot CLI installation failed.'
           }
-          copilot --version
+          copilot --no-auto-update --version
           if ($LASTEXITCODE -ne 0) {
             throw 'Copilot CLI could not start.'
           }
@@ -59,7 +59,10 @@ jobs:
             '--no-auto-update'
             '--no-custom-instructions'
             '--disable-builtin-mcps'
-            '--deny-tool', '*'
+            '--deny-tool', 'shell'
+            '--deny-tool', 'write'
+            '--deny-tool', 'url'
+            # An empty allowlist hides every tool from the model.
             '--available-tools'
           )
           $response = & copilot @arguments
