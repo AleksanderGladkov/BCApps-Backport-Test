@@ -3273,6 +3273,46 @@ Describe 'Private Git process adapter' -Tag 'EPIC-002', 'TEST-015', 'TEST-020' {
             $result.exit_code | Should -Be $Code
             $result.stdout.Length | Should -Be 0
             @($result.PSObject.Properties.Name) | Should -Be @('exit_code', 'stdout')
+
+            if (-not ('BackportStdinCloseFaultStream' -as [type])) {
+                Add-Type -TypeDefinition @'
+public sealed class BackportStdinCloseFaultStream : System.IO.MemoryStream
+{
+    public override void Flush()
+    {
+        throw new System.IO.IOException("sentinel-transport-secret");
+    }
+}
+'@
+            }
+            $stdin = [IO.StreamWriter]::new([BackportStdinCloseFaultStream]::new())
+            $fake = [pscustomobject]@{
+                StartInfo = $null; StandardInput = $stdin
+                StandardOutput = [pscustomobject]@{ BaseStream = [IO.MemoryStream]::new() }
+                StandardError = [pscustomobject]@{ BaseStream = [IO.MemoryStream]::new([Text.Encoding]::UTF8.GetBytes('sentinel-transport-secret')) }
+                HasExited = $true; ExitCode = $Code; Disposed = $false; Starts = 0
+            }
+            $fake | Add-Member ScriptMethod Start { $this.Starts++; return $true }
+            $fake | Add-Member ScriptMethod WaitForExitAsync {
+                param($token)
+                $token.ThrowIfCancellationRequested()
+                return [Threading.Tasks.Task]::CompletedTask
+            }
+            $fake | Add-Member ScriptMethod Dispose {
+                $this.StandardInput.BaseStream.Dispose()
+                $this.StandardOutput.BaseStream.Dispose()
+                $this.StandardError.BaseStream.Dispose()
+                $this.Disposed = $true
+            }
+            Mock New-BackportProcess { $fake }
+            $result = Invoke-BackportProcess -StartInfo $Info -Data ([byte[]]::new(1))
+            $result.exit_code | Should -Be $Code
+            $result.stdout.Length | Should -Be 0
+            @($result.PSObject.Properties.Name) | Should -Be @('exit_code', 'stdout')
+            ($result | Out-String) | Should -Not -Match 'sentinel-transport-secret'
+            $fake.Starts | Should -Be 1
+            $fake.Disposed | Should -BeTrue
+            Should -Invoke New-BackportProcess -Times 1 -Exactly
         }
     }
 
@@ -3291,7 +3331,20 @@ Describe 'Private Git process adapter' -Tag 'EPIC-002', 'TEST-015', 'TEST-020' {
             foreach ($path in @($pidFile, $childFile)) {
                 Test-Path -LiteralPath $path | Should -BeTrue
                 $ownedPid = [int][IO.File]::ReadAllText($path)
-                Get-Process -Id $ownedPid -ErrorAction SilentlyContinue | Should -BeNullOrEmpty
+                $ownedProcess = Get-Process -Id $ownedPid -ErrorAction SilentlyContinue
+                if ($IsLinux -and $ownedProcess) {
+                    $role = if ($path -eq $pidFile) { 'parent' } else { 'child' }
+                    $state = 'unavailable'
+                    try {
+                        $status = [IO.File]::ReadAllText("/proc/$ownedPid/status")
+                        $match = [regex]::Match($status, '(?m)^State:\s+([RSDZTtXxKWPIN])\s')
+                        if ($match.Success) { $state = $match.Groups[1].Value }
+                    }
+                    catch [IO.IOException] { $state = 'unavailable' }
+                    catch [UnauthorizedAccessException] { $state = 'unavailable' }
+                    Write-Host "owned-process-state role=$role state=$state"
+                }
+                $ownedProcess | Should -BeNullOrEmpty
             }
             Get-Process -Id $PID | Should -Not -BeNullOrEmpty
         }

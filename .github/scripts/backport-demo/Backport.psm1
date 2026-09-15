@@ -698,7 +698,12 @@ function Invoke-BackportProcess {
             # An early stdin close must not hide the child's exit code or bypass the deadline.
             $null = $process.WaitForExitAsync($deadline.Token).GetAwaiter().GetResult()
         }
-        finally { $process.StandardInput.Close() }
+        finally {
+            try { $process.StandardInput.Close() }
+            catch [IO.IOException] {
+                $null = $process.WaitForExitAsync($deadline.Token).GetAwaiter().GetResult()
+            }
+        }
         $null = $process.WaitForExitAsync($deadline.Token).GetAwaiter().GetResult()
         $null = [Threading.Tasks.Task]::WhenAll([Threading.Tasks.Task[]]@($stdout, $stderr)).WaitAsync($deadline.Token).GetAwaiter().GetResult()
         $result = [pscustomobject]@{ exit_code = $process.ExitCode; stdout = $output.ToArray() }

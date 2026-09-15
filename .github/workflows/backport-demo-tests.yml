@@ -8,7 +8,7 @@ permissions:
 
 jobs:
   test:
-    if: github.repository == 'AleksanderGladkov/BCApps-Backport-Test' && github.ref == 'refs/heads/private/algladkov/backport-ps-cutover'
+    if: github.repository == 'AleksanderGladkov/BCApps-Backport-Test'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     defaults:
@@ -44,19 +44,30 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Git version check failed.' }
           python -B -c "import sys, unicodedata; assert sys.version_info[:2] == (3, 13); assert unicodedata.unidata_version == '15.1.0'; print(sys.version); print('Unicode', unicodedata.unidata_version)"
           if ($LASTEXITCODE -ne 0) { throw 'Python reference runtime check failed.' }
-      - name: Capture focused live Linux reference offline (NOT full acceptance)
+      - name: Check four Linux process regressions (NOT full acceptance)
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: |
-          . ./.github/scripts/backport-demo/TestHelpers.ps1
-          . ./.github/scripts/backport-demo/Run-Tests.ps1
-          Invoke-FocusedReferenceCapture -ResultDirectory (Join-Path $env:RUNNER_TEMP 'focused-linux-reference')
-      - name: Preserve public-safe focused reference (NOT full acceptance)
+          $env:BACKPORT_TEST_BASELINE_DIR = Join-Path $env:GITHUB_WORKSPACE '.github/scripts/backport-demo'
+          Import-Module Pester -RequiredVersion 5.7.1 -ErrorAction Stop
+          $configuration = New-PesterConfiguration
+          $configuration.Run.Path = './.github/scripts/backport-demo/Backport.Tests.ps1'
+          $configuration.Run.PassThru = $true
+          $configuration.TestDrive.Enabled = $false
+          $configuration.Filter.FullName = @(
+            'Private Git process adapter.preserves exit * when the child closes stdin before reading all bytes',
+            'Private Git process adapter.uses a private 180 second deadline and kills only its owned process tree on expiry'
+          )
+          $configuration.TestResult.Enabled = $true
+          $configuration.TestResult.OutputPath = Join-Path $env:RUNNER_TEMP 'backport-pester.xml'
+          $result = Invoke-Pester -Configuration $configuration
+          if ($result.PassedCount -ne 4 -or $result.FailedCount -ne 0 -or $result.Result -ne 'Passed') {
+            throw 'Focused Linux process check failed; NOT full acceptance.'
+          }
+      - name: Preserve test results
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: focused-linux-reference-${{ github.run_attempt }}
-          path: |
-            ${{ runner.temp }}/focused-linux-reference/capture.json
-            ${{ runner.temp }}/focused-linux-reference/pester.xml
+          name: focused-linux-process-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/backport-pester.xml
           if-no-files-found: error
           retention-days: 7
