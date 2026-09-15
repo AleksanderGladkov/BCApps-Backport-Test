@@ -5,16 +5,15 @@ description: Alexander's fork-only clean backport executor and Milica's conflict
 
 ## Migration status and local tests
 
-The deployed PowerShell runtime is
-[09339bed6](https://github.com/AleksanderGladkov/BCApps-Backport-Test/commit/09339bed6b27657a9cdc3288a189cfb3f90dd531).
-The cleanup candidate starts from
-[386360dc2](https://github.com/AleksanderGladkov/BCApps-Backport-Test/commit/386360dc214026337e9aa17c500a00e8643b38d1),
-which also contains the approved comment-only source fixture. Cleanup and
-conditional deployment are approved, but the final Python-free Windows/Ubuntu
-matrix is still pending. Transitional results are not final cleanup acceptance.
-Keep deployment to main blocked until both final jobs pass on the reviewed
-candidate. Production dispatch remains main-only; retain its existing workflow
-path, ID, history, permissions and runtime policy.
+The tested Python-free PowerShell runtime is deployed on main at
+[d3a5864485f2372e03286d93f71a5cfb34194978](https://github.com/AleksanderGladkov/BCApps-Backport-Test/commit/d3a5864485f2372e03286d93f71a5cfb34194978).
+The [final matrix 35010271229](https://github.com/AleksanderGladkov/BCApps-Backport-Test/actions/runs/35010271229)
+passed 410/410 cases on each of Windows and Ubuntu, with zero failures, skips
+or unexecuted cases. The owner's conditional deployment approval was exercised
+only after both final jobs passed. This documentation update follows that tested
+code commit; it does not change the runtime or require another matrix run.
+Production dispatch remains main-only; retain its existing workflow path, ID,
+history, permissions and runtime policy.
 
 Production requires PowerShell 7.4+, bundled .NET 8+, and Git. Tests additionally
 require exactly Pester 5.7.1, not Python or Node.js. Provision Pester
@@ -44,10 +43,15 @@ and TEST-013 through TEST-024, with no skipped or unexecuted required cases.
 The current suite discovers 410 cases. Focused or discovery-only checks are not
 a full pass. Default XML output is external to the repository; temporary Git
 fixtures use owned `.github/scripts/.backport-run-*` directories and are cleaned
-up by the suite. Only those generated directories are excluded from Git.
+up by the suite. The scoped `.gitignore` excludes only `backport-pester*.xml`;
+the root `.gitignore` is unchanged.
 
 ## Accepted hosted evidence
 
+- [Final Python-free matrix 35010271229](https://github.com/AleksanderGladkov/BCApps-Backport-Test/actions/runs/35010271229)
+  at d3a5864485f2372e03286d93f71a5cfb34194978 passed all 410 Pester cases on
+  both OSes, retaining all 67 baseline mappings and 12 migration tags without
+  Python setup or execution. Both saved XML results have zero skipped/not-run cases.
 - [Transitional matrix 34990942466](https://github.com/AleksanderGladkov/BCApps-Backport-Test/actions/runs/34990942466)
   at 09339bed6 passed 410/410 Pester cases with zero skips and all 67 Python
   reference tests on both Windows and Ubuntu before deployment.
@@ -71,8 +75,9 @@ up by the suite. Only those generated directories are excluded from Git.
   and Issue comment `5684057475` retained their IDs; their status changed only
   from `pr-created` to `pr-reused` as expected.
 
-These receipts establish the accepted cutover and publication behavior, not the
-pending final cleanup matrix, an AL build, or a shipped fix. Do not merge, close,
+These receipts establish accepted cutover, publication and Python-free cleanup,
+not an AL build or a shipped fix. Issues 2/7 and PRs 3/8 were verified open, with
+both PRs unmerged, before the approved cleanup deployment. Do not merge, close,
 reset or delete the demo objects as part of cleanup.
 
 ## Run it
