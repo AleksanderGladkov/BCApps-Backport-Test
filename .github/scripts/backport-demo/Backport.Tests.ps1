@@ -3131,8 +3131,19 @@ Describe 'Private Git process adapter' -Tag 'EPIC-002', 'TEST-015', 'TEST-020' {
     }
 
     It 'retains every baseline isolation override only in the child environment' {
-        InModuleScope Backport -Parameters @{ Directory = $script:IoGit.Origin } {
+        $gitCandidates = @(
+            [pscustomobject]@{ Source = @(Get-Command git -CommandType Application -ErrorAction Stop)[0].Source }
+            [pscustomobject]@{ Source = (Join-Path $script:IoRoot 'missing/git.exe') }
+        )
+        Mock Get-Command { $gitCandidates } -ParameterFilter {
+            $Name -ceq 'git' -and $CommandType -eq [Management.Automation.CommandTypes]::Application
+        }
+        InModuleScope Backport -Parameters @{ Directory = $script:IoGit.Origin; GitCandidates = $gitCandidates } {
+            Mock Get-Command { $GitCandidates } -ParameterFilter {
+                $Name -ceq 'git' -and $CommandType -eq [Management.Automation.CommandTypes]::Application
+            }
             $info = New-BackportGitStartInfo -Config @{ dry_run = $false } -Directory $Directory -Arguments @('status', '--porcelain')
+            $info.FileName | Should -BeExactly $GitCandidates[0].Source
             $info.UseShellExecute | Should -BeFalse
             $info.RedirectStandardInput | Should -BeTrue
             $info.RedirectStandardOutput | Should -BeTrue
@@ -3153,6 +3164,24 @@ Describe 'Private Git process adapter' -Tag 'EPIC-002', 'TEST-015', 'TEST-020' {
                 'core.longpaths=true', 'commit.gpgsign=false'
             )) { @($info.ArgumentList) | Should -Contain $override }
             @($info.ArgumentList) -join '|' | Should -Not -Match 'sentinel-transport-secret'
+            (Invoke-BackportGit -Config @{ dry_run = $true } -Directory $Directory -Arguments @('status', '--porcelain')).exit_code |
+                Should -Be 0
+            Should -Invoke Get-Command -Times 2 -Exactly -ParameterFilter {
+                $Name -ceq 'git' -and $CommandType -eq [Management.Automation.CommandTypes]::Application
+            }
+        }
+        (Invoke-LocalGit $script:IoGit $script:IoGit.Origin @('status', '--porcelain')) | Should -BeExactly ''
+        $copyExecutables = [Collections.Generic.List[string]]::new()
+        Mock Invoke-HarnessProcess {
+            $copyExecutables.Add($FileName)
+            @{ ExitCode = 1 }
+        } -ParameterFilter { $Arguments -contains 'fetch' }
+        $stage = @{ Fixture = $script:IoGit }
+        { Copy-StageFixtureRefs -Source $stage -Target $stage } | Should -Throw -ExpectedMessage 'fixture_ref_clone_failed'
+        $copyExecutables.Count | Should -Be 1
+        $copyExecutables[0] | Should -BeExactly $gitCandidates[0].Source
+        Should -Invoke Get-Command -Times 2 -Exactly -ParameterFilter {
+            $Name -ceq 'git' -and $CommandType -eq [Management.Automation.CommandTypes]::Application
         }
     }
 

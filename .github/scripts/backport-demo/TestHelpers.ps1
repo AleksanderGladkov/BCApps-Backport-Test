@@ -291,7 +291,7 @@ function Copy-StageFixtureRefs {
     Assert-LocalGitFixture $Source.Fixture
     Assert-LocalGitFixture $Target.Fixture
     $environment = New-LocalGitEnvironment $Target.Fixture
-    $result = Invoke-HarnessProcess -FileName (Get-Command git -CommandType Application).Source -Environment $environment -Arguments @(
+    $result = Invoke-HarnessProcess -FileName (@(Get-Command git -CommandType Application)[0].Source) -Environment $environment -Arguments @(
         '-c', "core.hooksPath=$($Target.Fixture.EmptyHome)", '-c', 'protocol.allow=never',
         '-c', 'protocol.file.allow=always', '-c', 'protocol.ext.allow=never',
         '-c', 'submodule.recurse=false', '-C', $Target.Fixture.Origin,
@@ -888,7 +888,7 @@ function Invoke-LocalGit {
         '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-C', $directoryPath
     )
     if ($Arguments[0] -ceq 'init') { $Arguments += "--template=$($Fixture.EmptyHome)" }
-    $result = Invoke-HarnessProcess -FileName (Get-Command git -CommandType Application -ErrorAction Stop).Source `
+    $result = Invoke-HarnessProcess -FileName (@(Get-Command git -CommandType Application -ErrorAction Stop)[0].Source) `
         -Arguments ($safe + $Arguments) -Environment (New-LocalGitEnvironment $Fixture)
     if ($result.ExitCode -ne 0) { throw "local_git_failed: $($Arguments[0]): $($result.Stderr.Trim())" }
     if ($Arguments[0] -ceq 'push' -and $Fixture.LosePushResponse) { throw 'local_git_response_lost' }

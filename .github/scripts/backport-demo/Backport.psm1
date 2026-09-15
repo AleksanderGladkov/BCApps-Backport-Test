@@ -856,7 +856,7 @@ function New-BackportGitStartInfo {
             }
         }
         $info = [Diagnostics.ProcessStartInfo]::new()
-        $info.FileName = (Get-Command git -CommandType Application -ErrorAction Stop).Source
+        $info.FileName = @(Get-Command git -CommandType Application -ErrorAction Stop)[0].Source
         $info.UseShellExecute = $false
         $info.CreateNoWindow = $true
         $info.RedirectStandardInput = $true
