@@ -1284,6 +1284,17 @@ Describe 'Offline workflow baseline and EPIC-003 runner selection' -Tag 'EPIC-00
             production = [IO.File]::ReadAllText((Join-Path $workflows 'backport-demo.yml')).Replace("`r`n", "`n")
             tests = [IO.File]::ReadAllText((Join-Path $workflows 'backport-demo-tests.yml')).Replace("`r`n", "`n")
         }
+        $script:ActionPinUpdates = @{
+            'actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4' = 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1'
+            'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4' = 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1'
+            'actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4' = 'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1'
+        }
+        $script:HistoricalWorkflowTexts = Copy-BackportTestValue $script:WorkflowTexts
+        foreach ($kind in @('production', 'tests')) {
+            foreach ($oldPin in $script:ActionPinUpdates.Keys) {
+                $script:HistoricalWorkflowTexts[$kind] = $script:HistoricalWorkflowTexts[$kind].Replace($script:ActionPinUpdates[$oldPin], $oldPin)
+            }
+        }
     }
     It 'selects only EPIC-003 through the real runner without promoting development to acceptance' {
         $script:CapturedStageConfiguration = $null
@@ -1324,6 +1335,18 @@ Describe 'Offline workflow baseline and EPIC-003 runner selection' -Tag 'EPIC-00
                 -ProductionText $script:WorkflowTexts.production.Replace("`n", $newline) `
                 -TestsText $script:WorkflowTexts.tests.Replace("`n", $newline)
         }
+        foreach ($kind in @('production', 'tests')) {
+            foreach ($oldPin in $script:ActionPinUpdates.Keys) {
+                if (-not $script:HistoricalWorkflowTexts[$kind].Contains($oldPin, [StringComparison]::Ordinal)) { continue }
+                $newPin = $script:ActionPinUpdates[$oldPin]
+                $script:WorkflowTexts[$kind].Contains($newPin, [StringComparison]::Ordinal) | Should -BeTrue
+                $script:WorkflowTexts[$kind].Contains($oldPin, [StringComparison]::Ordinal) | Should -BeFalse
+                $mixed = Copy-BackportTestValue $script:WorkflowTexts
+                $mixed[$kind] = [regex]::new([regex]::Escape($newPin)).Replace($mixed[$kind], $oldPin, 1)
+                { Assert-BackportWorkflowBaseline -Parity $script:Reference -ProductionText $mixed.production -TestsText $mixed.tests } |
+                    Should -Throw -ExpectedMessage 'workflow_baseline_mismatch'
+            }
+        }
     }
     It 'accepts the exact planned PowerShell cutover and rejects weakened matrix or runtime contracts' -Tag 'TEST-017' {
         $pythonSetup = @(
@@ -1338,7 +1361,7 @@ Describe 'Offline workflow baseline and EPIC-003 runner selection' -Tag 'EPIC-00
             '            throw ''PowerShell 7.4+ and .NET 8+ are required.'''
             '          }'
         ) -join "`n"
-        $production = $script:WorkflowTexts.production.Replace($pythonSetup, $runtimeSetup).
+        $production = $script:HistoricalWorkflowTexts.production.Replace($pythonSetup, $runtimeSetup).
             Replace("  PYTHONDONTWRITEBYTECODE: '1'`n", '').Replace('shell: bash', 'shell: pwsh')
         foreach ($stage in @('validate', 'track', 'prepare', 'publish')) {
             $production = $production.Replace("python .github/scripts/backport-demo/controller.py $stage",
@@ -1549,6 +1572,9 @@ Describe 'Offline workflow baseline and EPIC-003 runner selection' -Tag 'EPIC-00
                         ''
                     ) -join "`n"
                     $protected = $block.Replace("          sparse-checkout: .github/scripts/backport-demo`n", $checkout)
+                }
+                foreach ($oldPin in $script:ActionPinUpdates.Keys) {
+                    $protected = $protected.Replace($oldPin, $script:ActionPinUpdates[$oldPin])
                 }
                 $texts[$kind].Contains($protected, [StringComparison]::Ordinal) | Should -BeTrue
                 $texts[$kind] = $texts[$kind].Replace($protected, '')

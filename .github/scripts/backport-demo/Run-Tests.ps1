@@ -54,6 +54,7 @@ function Assert-BackportWorkflowBaseline {
             Path = '.github/workflows/backport-demo.yml'
             Hash = 'ea06994495c62db9a9fd14802fbbd273b762be938588028ed8d8057d9ec2a9fb'
             CutoverHash = '17cbd7cc727333a9e33781687338e64716efb790b289d934ebcdc0183650ad9f'
+            Node24Hash = 'cd79e19cbf8d0ac7e05435d7b74efdb3ccdc863329292ce6540ebff843792d78'
             BlocksHash = 'ddb57d69cf5d4b44624378a3fe7e1e59181a250f931c577d3c090467ee2e23ce'
             Text = $ProductionText
             Blocks = 16
@@ -63,6 +64,7 @@ function Assert-BackportWorkflowBaseline {
             Hash = '2dbcc9f5ab13aa7d621852eed58cf6c83dd1200c5ce5dce5006c0de6dcff7af2'
             CutoverHash = '603902c8b24afaa1a50bcdc23d660c507b80be8edc26f979bade184eb481191c'
             FinalHash = 'a9213eeafd609f37ec0dc1b1b5da6505ded9559fc048ee770a8badd968e3b7cd'
+            Node24Hash = 'f4e88dde4740a74bc819c0d910992cfa3a626dec958e1a09ad45efaf5f1b5c89'
             BlocksHash = 'fa08ef48189fc34683cb4fd039af39ea91ed101fef53a32d12bb06164845f528'
             Text = $TestsText
             Blocks = 4
@@ -81,7 +83,8 @@ function Assert-BackportWorkflowBaseline {
         ).ToLowerInvariant()
         $cutover = $hash.Equals($contract.CutoverHash, [StringComparison]::Ordinal)
         $final = $kind -ceq 'tests' -and $hash.Equals($contract.FinalHash, [StringComparison]::Ordinal)
-        if ((-not $hash.Equals($contract.Hash, [StringComparison]::Ordinal) -and -not $cutover -and -not $final) -or
+        $node24 = $hash.Equals($contract.Node24Hash, [StringComparison]::Ordinal)
+        if ((-not $hash.Equals($contract.Hash, [StringComparison]::Ordinal) -and -not $cutover -and -not $final -and -not $node24) -or
             @($entry.protected_blocks).Count -ne $contract.Blocks) {
             throw 'workflow_baseline_mismatch'
         }
@@ -100,7 +103,7 @@ function Assert-BackportWorkflowBaseline {
                 throw 'workflow_baseline_mismatch'
             }
             $requiredBlock = $block
-            if (($cutover -or $final) -and $kind -ceq 'tests') {
+            if (($cutover -or $final -or $node24) -and $kind -ceq 'tests') {
                 $checkout = @(
                     '          sparse-checkout: |'
                     '            .github/scripts/backport-demo'
@@ -110,6 +113,12 @@ function Assert-BackportWorkflowBaseline {
                 ) -join "`n"
                 $requiredBlock = $block.Replace("          sparse-checkout: .github/scripts/backport-demo`n",
                     $checkout + "`n")
+            }
+            if ($node24) {
+                $requiredBlock = $requiredBlock.
+                    Replace('actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4', 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1').
+                    Replace('actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4', 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1').
+                    Replace('actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4', 'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1')
             }
             if (-not $text.Contains($requiredBlock, [StringComparison]::Ordinal)) {
                 throw 'workflow_baseline_mismatch'
