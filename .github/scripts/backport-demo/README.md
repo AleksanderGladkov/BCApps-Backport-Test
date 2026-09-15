@@ -5,14 +5,19 @@ description: Alexander's fork-only clean backport executor and Milica's conflict
 
 ## Migration status and local tests
 
-PowerShell cutover preparation is local to the migration branch. The focused
-workflow contract checks pass; full hosted Windows/Ubuntu parity, deployment,
-dry-run, existing-object reuse, and fresh-publication acceptance remain pending.
-Do not dispatch the production workflow from the migration branch or remove
-the Python reference files before those separately approved gates pass.
+The deployed PowerShell runtime is
+[09339bed6](https://github.com/AleksanderGladkov/BCApps-Backport-Test/commit/09339bed6b27657a9cdc3288a189cfb3f90dd531).
+The cleanup candidate starts from
+[386360dc2](https://github.com/AleksanderGladkov/BCApps-Backport-Test/commit/386360dc214026337e9aa17c500a00e8643b38d1),
+which also contains the approved comment-only source fixture. Cleanup and
+conditional deployment are approved, but the final Python-free Windows/Ubuntu
+matrix is still pending. Transitional results are not final cleanup acceptance.
+Keep deployment to main blocked until both final jobs pass on the reviewed
+candidate. Production dispatch remains main-only; retain its existing workflow
+path, ID, history, permissions and runtime policy.
 
 Production requires PowerShell 7.4+, bundled .NET 8+, and Git. Tests additionally
-require Python 3.13 (Unicode 15.1.0) and exactly Pester 5.7.1. Provision Pester
+require exactly Pester 5.7.1, not Python or Node.js. Provision Pester
 only during test setup, in user scope, when that version is absent:
 
 ```powershell
@@ -22,23 +27,53 @@ if (-not (Get-Module -ListAvailable Pester | Where-Object Version -EQ ([version]
 Import-Module Pester -RequiredVersion 5.7.1 -ErrorAction Stop
 ```
 
-From the repository root, run the unchanged reference suite and full parity
-gate offline. Tests use fake HTTP and temporary local Git origins, not GitHub:
+From the repository root, run the full parity gate offline. Tests use fake HTTP
+and temporary local Git origins, not GitHub:
 
 ```powershell
-$env:BACKPORT_TEST_BASELINE_DIR = Join-Path (Get-Location) '.github/scripts/backport-demo'
-$env:PYTHONDONTWRITEBYTECODE = '1'
-python -B -m unittest discover -s .github/scripts/backport-demo -p 'test_*.py' -v
-if ($LASTEXITCODE -ne 0) { throw 'Python reference suite failed.' }
+$env:BACKPORT_TEST_WORKFLOW_DIR = Join-Path (Get-Location) '.github/workflows'
 & ./.github/scripts/backport-demo/Run-Tests.ps1 -ResultPath (Join-Path ([IO.Path]::GetTempPath()) 'backport-pester.xml')
 ```
 
-The manual test workflow runs both suites on Ubuntu and Windows with independent
+The manual test workflow runs Pester on Ubuntu and Windows with independent
 30-minute jobs, Contents read only, and no publishing credential. It logs runtime,
 Git and Pester versions and always attempts to retain XML results for seven days
 under distinct OS/attempt artifact names. A missing result or failed dependency
 setup is not acceptance. The full gate requires all 67 mapped baseline scenarios
 and TEST-013 through TEST-024, with no skipped or unexecuted required cases.
+The current suite discovers 410 cases. Focused or discovery-only checks are not
+a full pass. Default XML output is external to the repository; temporary Git
+fixtures use owned `.github/scripts/.backport-run-*` directories and are cleaned
+up by the suite. Only those generated directories are excluded from Git.
+
+## Accepted hosted evidence
+
+- [Transitional matrix 34990942466](https://github.com/AleksanderGladkov/BCApps-Backport-Test/actions/runs/34990942466)
+  at 09339bed6 passed 410/410 Pester cases with zero skips and all 67 Python
+  reference tests on both Windows and Ubuntu before deployment.
+- [Source PR 1 dry run 34992819393](https://github.com/AleksanderGladkov/BCApps-Backport-Test/actions/runs/34992819393)
+  made no object changes.
+  [Reuse run 34993165554](https://github.com/AleksanderGladkov/BCApps-Backport-Test/actions/runs/34993165554),
+  attempts 1 and 2, preserved open
+  [Issue 2](https://github.com/AleksanderGladkov/BCApps-Backport-Test/issues/2),
+  [PR 3](https://github.com/AleksanderGladkov/BCApps-Backport-Test/pull/3),
+  comments and head `c1de55e330150d23b374aa23e6f774878207dd63`.
+- [Source PR 6](https://github.com/AleksanderGladkov/BCApps-Backport-Test/pull/6)
+  was squash-merged at 386360dc2.
+  [Dry run 34995091907](https://github.com/AleksanderGladkov/BCApps-Backport-Test/actions/runs/34995091907)
+  made no object changes.
+  [Publication run 34995308640](https://github.com/AleksanderGladkov/BCApps-Backport-Test/actions/runs/34995308640)
+  created exactly open
+  [Issue 7](https://github.com/AleksanderGladkov/BCApps-Backport-Test/issues/7) and
+  [PR 8](https://github.com/AleksanderGladkov/BCApps-Backport-Test/pull/8).
+  Attempt 2 reused the same objects and head
+  `0652ff833b6b80332db05191aeae6269bd292da0`. Source comment `5684058038`
+  and Issue comment `5684057475` retained their IDs; their status changed only
+  from `pr-created` to `pr-reused` as expected.
+
+These receipts establish the accepted cutover and publication behavior, not the
+pending final cleanup matrix, an AL build, or a shipped fix. Do not merge, close,
+reset or delete the demo objects as part of cleanup.
 
 ## Run it
 
@@ -102,14 +137,33 @@ days and are diagnostics, not a complete durable external ledger.
 
 ## Files and state
 
-The prepared workflow calls [Invoke-Backport.ps1](Invoke-Backport.ps1) with
+The production workflow calls [Invoke-Backport.ps1](Invoke-Backport.ps1) with
 `-Stage validate`, `track`, `prepare`, or `publish`, loading only the trusted
 [module](Backport.psm1) and adjacent [compatibility data](compat.json).
-The unchanged [Python controller](controller.py) and [reference tests](test_controller.py)
-remain beside the [Pester suite](Backport.Tests.ps1) during migration. No product
-AL build is performed by these tests. Compatibility data records Python 3.13 /
-Unicode 15.1.0 provenance and the applicable license notices; it is not generated
-or downloaded by production jobs.
+The final package also uses the [Pester suite](Backport.Tests.ps1),
+[test helpers](TestHelpers.ps1), [runner](Run-Tests.ps1), and
+[parity reference](parity.json): seven runtime/test/data files. Current tests
+execute PowerShell and compare against pinned reference bytes; they do not run
+a Python oracle. Historical source and capture metadata are retained, not
+rewritten to imply live cross-language execution. No product AL build is performed.
+
+Compatibility data preserves Python 3.13 / Unicode 15.1.0 provenance, fixed
+canonical vectors and applicable license notices. Production does not generate
+or download it. The parity resource retains the exact 67 baseline names pinned
+to source commit `514500f55f064aa9ab86607e6d0803f2abd6376c`.
+Separate Windows and Linux envelopes each contain 28 stage records and two
+state records, with pinned source, exporter, helper and capture provenance.
+
+- Windows historical capture on 2026-09-15 used PowerShell 7.6.6, .NET 10.0.12,
+  Git 2.55.0.windows.5, Python 3.13.15 and Unicode 15.1.0; 27 focused cases passed.
+- [Linux historical capture 34985587470](https://github.com/AleksanderGladkov/BCApps-Backport-Test/actions/runs/34985587470),
+  attempt 1 at `c544d98d02561a7396912870e8da4fc3da99e2d6`, used Ubuntu 24.04.5,
+  PowerShell 7.6.5, .NET 10.0.11, Git 2.55.0, Pester 5.7.1, Python 3.13.15
+  and Unicode 15.1.0; 27 focused cases passed.
+
+Those captures are historical live Python handoffs, not full-suite acceptance.
+Current checks verify each envelope and its byte/hash pairs, reject modified
+provenance even after payload rehashing, and replay only the matching OS data.
 
 Each job keeps state under RUNNER_TEMP/backport-state and uploads the whole
 directory even on failure. It contains the validated plan, Issue tracking,
@@ -141,14 +195,18 @@ Resolver adaptation remains deferred. Preparation `published=false` is not a
 final publication verdict. These tests do not establish AI resolution, label
 automation, AL correctness or delivery of a shipped fix.
 
-Before deploying, record the tested pre-cutover main SHA, workflow ID/history,
-source/target refs and existing object identities. Restore the recorded Python
-version only through a reviewed revert in place, never a reset, force-push or
-renamed fallback workflow. Keep Python source/tests/exporter until hosted
-acceptance and cleanup are approved. If any write may have occurred, stop
-dispatches, retain journals/artifacts/history and reconcile exact objects before
-retrying. Rollback does not authorize closing Issues, merging PRs, deleting
-branches/comments/history, or retrying an uncertain create.
+The recoverable tested Python rollback is
+[6972ef0a0](https://github.com/AleksanderGladkov/BCApps-Backport-Test/commit/6972ef0a0e0c00b35d4e00fb866363b4742c7266).
+Before any rollback, stop dispatches and reconcile the current source/target
+refs and exact object identities. Prepare a reviewed restoration of that tested
+Python runtime and its required files at their original paths, including
+`.github/workflows/backport-demo.yml`. Validate the restoration before deployment.
+Keep workflow ID `357933757` and its history intact; never reset, force-push,
+rename the workflow or delete history to bypass an uncertain-write guard.
+
+If any write may have occurred, retain journals/artifacts/history and reconcile
+exact objects before retrying. Rollback does not authorize closing Issues,
+merging PRs, deleting branches/comments/history, or retrying an uncertain create.
 
 ## Milica's next integration step
 

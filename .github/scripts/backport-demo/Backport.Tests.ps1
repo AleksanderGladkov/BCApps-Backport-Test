@@ -168,7 +168,7 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
         $environment.INPUT_ALLOWED_ACTOR_IDS = '12'
         { & $T.Module { param($e) New-BackportContext -Environment $e } $environment } | Should -Throw
     }
-    It 'matches Python user-login coercion for <Case>' -Tag 'TEST-018', 'TEST-020' -ForEach @(
+    It 'matches captured baseline user-login coercion for <Case>' -Tag 'TEST-018', 'TEST-020' -ForEach @(
         @{ Case = 'string casefold'; Actor = 'author'; UserResponse = @{ id = 59250993; login = 'AUTHOR' }; Accepted = $true }
         @{ Case = 'different string'; Actor = 'author'; UserResponse = @{ id = 59250993; login = 'other' }; Accepted = $false }
         @{ Case = 'singleton string list'; Actor = 'author'; UserResponse = @{ id = 59250993; login = @('author') }; Accepted = $false }
@@ -201,7 +201,7 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
                 }
                 return ,$value
             }
-            $python = Invoke-PythonStageHandoff $oracle @('validate') -CaptureFailure -UserResponse $UserResponse
+            $python = Invoke-ReferenceStageHandoff $oracle @('validate') -CaptureFailure -UserResponse $UserResponse
             if ($Accepted) {
                 $python.failure | Should -BeNullOrEmpty
                 $plan = Invoke-BackportTestStage $T validate
@@ -940,7 +940,7 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
         $oracle = New-BackportStageTest -ParentPath $script:HarnessRoot -Module $T.Module -Template $T
         try {
             Copy-StageFixtureRefs $T $oracle
-            $python = Invoke-PythonStageHandoff $oracle @('validate', 'track', 'prepare', 'publish')
+            $python = Invoke-ReferenceStageHandoff $oracle @('validate', 'track', 'prepare', 'publish')
             $python.outcomes[-1].status | Should -BeExactly 'pr-created'
             Assert-StageTwoFileTree $oracle 'backport/29.x/pr-7'
             (Invoke-StageFixtureGit $oracle @('diff', '--name-only', $oracle.Fixture.Target, 'backport/29.x/pr-7')) | Should -BeExactly 'src/two.al'
@@ -958,7 +958,7 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
         $oracle = New-BackportStageTest -ParentPath $script:HarnessRoot -Module $T.Module -Template $T
         try {
             Copy-StageFixtureRefs $T $oracle
-            $python = Invoke-PythonStageHandoff $oracle @('validate', 'track', 'prepare', 'publish')
+            $python = Invoke-ReferenceStageHandoff $oracle @('validate', 'track', 'prepare', 'publish')
             $python.outcomes[-1].status | Should -BeExactly 'already_applied'
             Assert-StageTwoFileTree $oracle $oracle.Fixture.Target
             Assert-StageNoPublication $oracle
@@ -978,9 +978,9 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
         $oracle = New-BackportStageTest -ParentPath $script:HarnessRoot -Module $T.Module -Template $T
         try {
             Copy-StageFixtureRefs $T $oracle
-            $null = Invoke-PythonStageHandoff $oracle @('validate', 'track', 'prepare')
+            $null = Invoke-ReferenceStageHandoff $oracle @('validate', 'track', 'prepare')
             Set-StageForgedEffect $oracle $Kind
-            $python = Invoke-PythonStageHandoff $oracle @('publish') -CaptureFailure
+            $python = Invoke-ReferenceStageHandoff $oracle @('publish') -CaptureFailure
             $python.failure | Should -BeExactly 'recomputed_result_mismatch'
             Assert-StageNoPublication $oracle
             $null = Invoke-BackportTestStages $T
@@ -1139,7 +1139,7 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
         (Get-StageJson $T 'result.json').published | Should -BeFalse
         (Get-StageJson $T 'publication.json').attempted | Should -Contain 'pr'
     }
-    It 'hands complete stages across Python and PowerShell in both directions with identical bindings' -Tag 'TEST-018' {
+    It 'preserves captured stage handoffs and PowerShell equivalents with identical bindings' -Tag 'TEST-018' {
         $pythonFirst = New-BackportStageTest -ParentPath $script:HarnessRoot -Module $T.Module -Template $T
         $powershellFirst = New-BackportStageTest -ParentPath $script:HarnessRoot -Module $T.Module -Template $T
         try {
@@ -1150,11 +1150,11 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
                 Set-BackportStageConfig $test
             }
             $expected = Get-StageReceipt $T (Invoke-BackportTestStages $T -Last publish)
-            $python = Invoke-PythonStageHandoff $pythonFirst @('validate', 'track', 'prepare')
+            $python = Invoke-ReferenceStageHandoff $pythonFirst @('validate', 'track', 'prepare')
             $python.outcomes[-1].status | Should -BeExactly 'applied'
             $fromPython = Get-StageReceipt $pythonFirst (Invoke-BackportTestStage $pythonFirst publish)
             $null = Invoke-BackportTestStages $powershellFirst
-            $python = Invoke-PythonStageHandoff $powershellFirst @('publish')
+            $python = Invoke-ReferenceStageHandoff $powershellFirst @('publish')
             $fromPowerShell = Get-StageReceipt $powershellFirst $python.outcomes[-1]
             foreach ($receipt in @($fromPython, $fromPowerShell)) {
                 @($receipt.git_effects | Where-Object { $_.arguments[0] -ceq 'push' }).Count | Should -Be 1
@@ -1169,7 +1169,7 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
             }
             $head = Invoke-StageFixtureGit $pythonFirst @('rev-parse', 'backport/29.x/pr-7')
             $expectedReuse = Get-StageReceipt $T (Invoke-BackportTestStage $T publish)
-            $fromPythonReuse = Get-StageReceipt $pythonFirst (Invoke-PythonStageHandoff $pythonFirst @('publish')).outcomes[-1]
+            $fromPythonReuse = Get-StageReceipt $pythonFirst (Invoke-ReferenceStageHandoff $pythonFirst @('publish')).outcomes[-1]
             $fromPowerShellReuse = Get-StageReceipt $powershellFirst (Invoke-BackportTestStage $powershellFirst publish)
             foreach ($receipt in @($fromPythonReuse, $fromPowerShellReuse)) {
                 $receipt.outcome.status | Should -BeExactly 'pr-reused'
@@ -1199,7 +1199,7 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
                     $test.GitEffects.Clear()
                 }
                 { Invoke-BackportTestStage $pythonFirst publish } | Should -Throw -ExpectedMessage 'artifact_context_mismatch'
-                (Invoke-PythonStageHandoff $powershellFirst @('publish') -CaptureFailure).failure | Should -BeExactly 'artifact_context_mismatch'
+                (Invoke-ReferenceStageHandoff $powershellFirst @('publish') -CaptureFailure).failure | Should -BeExactly 'artifact_context_mismatch'
                 foreach ($test in @($pythonFirst, $powershellFirst)) {
                     $test.Api.calls.Count | Should -Be 0
                     $test.GitEffects.Count | Should -Be 0
@@ -1212,7 +1212,7 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
             Remove-LocalGitFixture $powershellFirst.Fixture
         }
     }
-    It 'matches cross-language reason and effect traces for <Reason>' -Tag 'TEST-018' -ForEach @(
+    It 'matches captured baseline reason and effect traces for <Reason>' -Tag 'TEST-018' -ForEach @(
         @{ Reason = 'target_advanced' }, @{ Reason = 'recomputed_result_mismatch' }
     ) {
         $powershellFirst = New-BackportStageTest -ParentPath $script:HarnessRoot -Module $T.Module -Template $T
@@ -1223,7 +1223,7 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
                 $test.Environment.GITHUB_STEP_SUMMARY = Join-Path $test.Fixture.Root 'summary'
                 Set-BackportStageConfig $test
             }
-            $null = Invoke-PythonStageHandoff $T @('validate', 'track', 'prepare')
+            $null = Invoke-ReferenceStageHandoff $T @('validate', 'track', 'prepare')
             $null = Invoke-BackportTestStages $powershellFirst
             foreach ($test in @($T, $powershellFirst)) {
                 if ($Reason -ceq 'target_advanced') { $test.Api.target = 'a' * 40 }
@@ -1235,7 +1235,7 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
                     Set-StageJson $test 'result.json' $result
                 }
             }
-            $python = Invoke-PythonStageHandoff $powershellFirst @('publish') -CaptureFailure
+            $python = Invoke-ReferenceStageHandoff $powershellFirst @('publish') -CaptureFailure
             if ($Reason -ceq 'target_advanced') {
                 $python.failure | Should -BeNullOrEmpty
                 $python.outcomes[-1].status | Should -BeExactly 'needs-attention'
@@ -1277,17 +1277,19 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
 
 Describe 'Offline workflow baseline and EPIC-003 runner selection' -Tag 'EPIC-003' {
     BeforeAll {
-        if (-not $env:BACKPORT_TEST_BASELINE_DIR) { throw 'BACKPORT_TEST_BASELINE_DIR must select the pinned read-only Python oracle.' }
-        $github = [IO.Directory]::GetParent([IO.Directory]::GetParent($env:BACKPORT_TEST_BASELINE_DIR).FullName).FullName
+        $workflows = if ($env:BACKPORT_TEST_WORKFLOW_DIR) { $env:BACKPORT_TEST_WORKFLOW_DIR } else {
+            [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../workflows'))
+        }
         $script:WorkflowTexts = @{
-            production = [IO.File]::ReadAllText((Join-Path $github 'workflows\backport-demo.yml')).Replace("`r`n", "`n")
-            tests = [IO.File]::ReadAllText((Join-Path $github 'workflows\backport-demo-tests.yml')).Replace("`r`n", "`n")
+            production = [IO.File]::ReadAllText((Join-Path $workflows 'backport-demo.yml')).Replace("`r`n", "`n")
+            tests = [IO.File]::ReadAllText((Join-Path $workflows 'backport-demo-tests.yml')).Replace("`r`n", "`n")
         }
     }
     It 'selects only EPIC-003 through the real runner without promoting development to acceptance' {
         $script:CapturedStageConfiguration = $null
         Mock Invoke-Pester {
             $script:CapturedStageConfiguration = $Configuration
+            if (@($Configuration.Filter.Tag.Value).Count -eq 0) { return New-SyntheticResult }
             $result = New-SyntheticDevelopmentResult
             $result.Tests[0].Tag = @('EPIC-003')
             $result
@@ -1303,8 +1305,16 @@ Describe 'Offline workflow baseline and EPIC-003 runner selection' -Tag 'EPIC-00
         @($script:CapturedStageConfiguration.Filter.FullName.Value).Count | Should -Be 0
         $script:CapturedStageConfiguration.TestResult.OutputPath.Value | Should -BeExactly $path
         $script:CapturedStageConfiguration.TestDrive.Enabled.Value | Should -BeFalse
-        Should -Invoke Invoke-Pester -Times 1 -Exactly
-        Should -Invoke Import-Module -Times 1 -Exactly -ParameterFilter {
+        $gate = Invoke-BackportTests -ResultPath $path
+        $gate.ExitCode | Should -Be 0
+        $gate.Mode | Should -BeExactly 'FullAcceptance'
+        @($script:CapturedStageConfiguration.Run.Path.Value) | Should -Be @((Join-Path $PSScriptRoot 'Backport.Tests.ps1'))
+        @($script:CapturedStageConfiguration.Filter.Tag.Value).Count | Should -Be 0
+        @($script:CapturedStageConfiguration.Filter.FullName.Value).Count | Should -Be 0
+        $script:CapturedStageConfiguration.TestResult.OutputPath.Value | Should -BeExactly $path
+        $script:CapturedStageConfiguration.TestDrive.Enabled.Value | Should -BeFalse
+        Should -Invoke Invoke-Pester -Times 2 -Exactly
+        Should -Invoke Import-Module -Times 2 -Exactly -ParameterFilter {
             $Name -ceq 'Pester' -and $RequiredVersion -eq '5.7.1'
         }
     }
@@ -1404,6 +1414,36 @@ Describe 'Offline workflow baseline and EPIC-003 runner selection' -Tag 'EPIC-00
             '          retention-days: 7'
             ''
         ) -join "`n"
+        $finalTests = $tests
+        foreach ($pythonBlock in @(
+            ($pythonSetup + "`n")
+            "    env:`n      PYTHONDONTWRITEBYTECODE: '1'`n"
+            ((@(
+                '          python -B -c "import sys, unicodedata; assert sys.version_info[:2] == (3, 13); assert unicodedata.unidata_version == ''15.1.0''; print(sys.version); print(''Unicode'', unicodedata.unidata_version)"'
+                '          if ($LASTEXITCODE -ne 0) { throw ''Python reference runtime check failed.'' }'
+                ''
+            )) -join "`n")
+            ((@(
+                '      - name: Test unchanged Python reference offline'
+                '        run: |'
+                '          python -B -m unittest discover -s .github/scripts/backport-demo -p ''test_*.py'' -v'
+                '          if ($LASTEXITCODE -ne 0) { throw ''Python reference suite failed.'' }'
+                ''
+            )) -join "`n")
+        )) {
+            ([regex]::Matches($finalTests, [regex]::Escape($pythonBlock))).Count | Should -Be 1
+            $finalTests = $finalTests.Replace($pythonBlock, '')
+        }
+        $baselineAssignment = '          $env:BACKPORT_TEST_BASELINE_DIR = Join-Path $env:GITHUB_WORKSPACE ''.github/scripts/backport-demo'''
+        ([regex]::Matches($finalTests, [regex]::Escape($baselineAssignment))).Count | Should -Be 1
+        $finalTests = $finalTests.Replace($baselineAssignment,
+            '          $env:BACKPORT_TEST_WORKFLOW_DIR = Join-Path $env:GITHUB_WORKSPACE ''.github/workflows''')
+        $testStepCount = ([regex]::Matches($tests, '(?m)^      - ')).Count
+        ([regex]::Matches($finalTests, '(?m)^      - ')).Count | Should -Be ($testStepCount - 2)
+        $finalTests | Should -Not -Match '(?i)python|test_\*\.py|BACKPORT_TEST_BASELINE_DIR'
+        Write-Host ('Final tests workflow SHA256 (LF): ' + [Convert]::ToHexString(
+            [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($finalTests))
+        ).ToLowerInvariant())
         ([regex]::Matches($production, [regex]::Escape($runtimeSetup))).Count | Should -Be 4
         $production | Should -Not -Match 'setup-python|controller\.py|PYTHONDONTWRITEBYTECODE'
         $baselineProduction = $production.Replace($runtimeSetup, $pythonSetup).Replace('shell: pwsh', 'shell: bash').
@@ -1440,6 +1480,8 @@ Describe 'Offline workflow baseline and EPIC-003 runner selection' -Tag 'EPIC-00
                 -ProductionText $production.Replace("`n", $newline) -TestsText $tests.Replace("`n", $newline)
             Assert-BackportWorkflowBaseline -Parity $script:Reference `
                 -ProductionText $baselineProduction.Replace("`n", $newline) -TestsText $baselineTests.Replace("`n", $newline)
+            Assert-BackportWorkflowBaseline -Parity $script:Reference `
+                -ProductionText $production.Replace("`n", $newline) -TestsText $finalTests.Replace("`n", $newline)
         }
         foreach ($mutation in @(
             @{ production = $production.Replace('shell: pwsh', 'shell: bash'); tests = $tests },
@@ -1452,6 +1494,44 @@ Describe 'Offline workflow baseline and EPIC-003 runner selection' -Tag 'EPIC-00
             { Assert-BackportWorkflowBaseline -Parity $script:Reference `
                 -ProductionText $mutation.production -TestsText $mutation.tests } |
                 Should -Throw -ExpectedMessage 'workflow_baseline_mismatch'
+        }
+        foreach ($required in @(
+            'name: Backport executor tests'
+            '  workflow_dispatch:'
+            '  contents: read'
+            '    if: github.repository == ''AleksanderGladkov/BCApps-Backport-Test'''
+            '      fail-fast: false'
+            '        os: [ubuntu-latest, windows-latest]'
+            '    runs-on: ${{ matrix.os }}'
+            '    timeout-minutes: 30'
+            '        shell: pwsh'
+            'actions/checkout@11d5960a326750d5838078e36cf38b85af677262'
+            '          ref: ${{ github.sha }}'
+            '          persist-credentials: false'
+            '            .github/workflows/backport-demo.yml'
+            '            .github/workflows/backport-demo-tests.yml'
+            '          sparse-checkout-cone-mode: false'
+            '        id: setup'
+            '[version]''7.4'''
+            '[version]''8.0'''
+            'Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Repository PSGallery -Force -ErrorAction Stop'
+            'Import-Module Pester -RequiredVersion 5.7.1 -ErrorAction Stop'
+            '          git --version'
+            '          if ($LASTEXITCODE -ne 0) { throw ''Git version check failed.'' }'
+            '        if: ${{ !cancelled() && steps.setup.outcome == ''success'' }}'
+            '          $env:BACKPORT_TEST_WORKFLOW_DIR = Join-Path $env:GITHUB_WORKSPACE ''.github/workflows'''
+            '          & ./.github/scripts/backport-demo/Run-Tests.ps1 -ResultPath (Join-Path $env:RUNNER_TEMP ''backport-pester.xml'')'
+            'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'
+            '        if: always()'
+            '          name: backport-tests-${{ matrix.os }}-${{ github.run_attempt }}'
+            '          path: ${{ runner.temp }}/backport-pester.xml'
+            '          if-no-files-found: error'
+            '          retention-days: 7'
+        )) {
+            $finalTests.Contains($required, [StringComparison]::Ordinal) | Should -BeTrue
+            { Assert-BackportWorkflowBaseline -Parity $script:Reference `
+                -ProductionText $production -TestsText $finalTests.Replace($required, '') } |
+                Should -Throw -ExpectedMessage 'workflow_baseline_mismatch' -Because "final workflow must retain: $required"
         }
     }
     It 'rejects changes to every protected production and manual read-only test block' -Tag 'TEST-017' {
@@ -1918,7 +1998,7 @@ Describe 'Canonical JSON and bound atomic artifacts' -Tag 'EPIC-002', 'TEST-013'
             Should -Throw '*invalid_artifact*'
     }
     It 'isolates <Boundary> fixture credentials even with shadowing environment names' -ForEach @(
-        @{ Boundary = 'process' }, @{ Boundary = 'python' }, @{ Boundary = 'harness' }
+        @{ Boundary = 'process' }, @{ Boundary = 'reference-history-and-git' }, @{ Boundary = 'harness' }
     ) {
         $saved = @{}
         try {
@@ -1944,21 +2024,31 @@ if ($env:Keys -cne 'synthetic-shadow-value' -or $env:GH_TOKEN -or $env:GITHUB_TO
             }
             else {
                 $config = New-StateConfig
-                Invoke-PythonStateHandoff -BaselineDirectory $env:BACKPORT_TEST_BASELINE_DIR -StateDirectory $config.state_dir -Mode seed
+                (Get-BackportStageReferences).state.seed.child_credentials_absent | Should -BeTrue
+                Invoke-ReferenceStateHandoff -StateDirectory $config.state_dir -Mode seed
+                $fixture = New-LocalGitFixture -ParentPath $script:HarnessRoot
+                try {
+                    $environment = New-LocalGitEnvironment $fixture
+                    foreach ($name in @('GH_TOKEN', 'GITHUB_TOKEN', 'GIT_TRACE')) {
+                        $environment.ContainsKey($name) | Should -BeFalse
+                    }
+                    (Invoke-LocalGit $fixture $fixture.Origin @('rev-parse', 'HEAD')) | Should -BeExactly $fixture.Source
+                }
+                finally { Remove-LocalGitFixture $fixture }
             }
         }
         finally {
             foreach ($entry in $saved.GetEnumerator()) { [Environment]::SetEnvironmentVariable($entry.Key, $entry.Value) }
         }
     }
-    It 'performs actual Python-to-PowerShell-to-Python same-binding state handoff' {
+    It 'round-trips captured baseline same-binding state through PowerShell without an oracle runtime' {
         $config = New-StateConfig
-        Invoke-PythonStateHandoff -BaselineDirectory $env:BACKPORT_TEST_BASELINE_DIR -StateDirectory $config.state_dir -Mode seed
+        Invoke-ReferenceStateHandoff -StateDirectory $config.state_dir -Mode seed
         foreach ($name in @('plan.json','tracking.json','result.json','publication.json')) {
             $value = & $script:Core { param($c,$n) Read-BackportArtifact $c $n } $config $name
             & $script:Core { param($c,$n,$v) Write-BackportState $c $n $v } $config $name $value
         }
-        Invoke-PythonStateHandoff -BaselineDirectory $env:BACKPORT_TEST_BASELINE_DIR -StateDirectory $config.state_dir -Mode verify
+        Invoke-ReferenceStateHandoff -StateDirectory $config.state_dir -Mode verify
     }
     It 'rejects state links and ancestor substitution without touching their targets' {
         $config = New-StateConfig
@@ -2160,6 +2250,78 @@ Describe 'Repository-local reference resources' -Tag 'EPIC-001' {
             [Convert]::ToHexString([Security.Cryptography.SHA256]::HashData($bytes)).ToLowerInvariant() |
                 Should -BeExactly $vector.sha256
         }
+        $platform = if ($IsWindows) { 'Windows' } elseif ($IsLinux) { 'Linux' } else { throw 'unsupported_reference_platform' }
+        (Get-BackportStageReferences).runtime.os | Should -BeExactly $platform
+        foreach ($profile in @('stage_reference', 'stage_reference_linux')) {
+        $reference = Get-BackportStageReferences -Reference $script:Reference[$profile]
+        $reference.runtime.os | Should -BeExactly $(if ($profile -ceq 'stage_reference') { 'Windows' } else { 'Linux' })
+        if ($profile -ceq 'stage_reference_linux') {
+            $reference.capture.verified | Should -BeTrue
+            $reference.capture.run_id | Should -BeExactly '34985587470'
+            $reference.source_revision | Should -BeExactly 'c544d98d02561a7396912870e8da4fc3da99e2d6'
+            $reference.capture.discovered | Should -Be 410
+            $reference.capture.selected_passed | Should -Be 27
+            $reference.capture.failed | Should -Be 0
+            $reference.capture.state_calls.Count | Should -Be 3
+            $reference.state.Count | Should -Be 2
+            $reference.capture.receipt_sha256 | Should -BeExactly 'fbe2d72d3f3802a75fc94873b773301f3a5e45f6be010466e56939e41148b8ee'
+            $envelope = Copy-BackportTestValue $reference
+            $envelope.Remove('envelope_sha256')
+            (Get-StageHash (ConvertTo-BackportReferenceBytes $envelope)) | Should -BeExactly $reference.envelope_sha256
+            foreach ($name in @('controller.py', 'test_controller.py')) {
+                $reference.source_sha256_lf[$name] | Should -BeExactly $script:Reference.stage_reference.source_sha256_lf[$name]
+            }
+            $reference.exporter_sha256_lf | Should -BeExactly $script:Reference.stage_reference.exporter_sha256_lf
+            $changed = Copy-BackportTestValue $reference
+            $changed.envelope_sha256 = '0' + $changed.envelope_sha256.Substring(1)
+            { Get-BackportStageReferences -Reference $changed } | Should -Throw
+            $changed = Copy-BackportTestValue $reference
+            $changed['Keys'] = @($changed.psbase.Keys)
+            { Get-BackportStageReferences -Reference $changed } | Should -Throw
+        }
+        $reference.records.Count | Should -Be 28
+        $reference.capture.stage_calls.Count | Should -Be 31
+        $reference.capture.repeated_identical.Count | Should -Be 3
+        foreach ($entry in $reference.records.GetEnumerator()) {
+            (Get-StageHash (ConvertTo-BackportReferenceBytes $entry.Value.input)) | Should -BeExactly $entry.Key
+        }
+        foreach ($mutation in @('record', 'missing', 'state', 'metadata', 'runtime', 'source', 'helper',
+            'exporter', 'count', 'evidence', 'tests', 'wrapper', 'added', 'removed',
+            'platform', 'platform-case', 'unsupported-platform', 'revision', 'files', 'verified')) {
+            $changed = Copy-BackportTestValue $reference
+            $key = @($changed.records.Keys)[0]
+            switch ($mutation) {
+                record { $changed.records[$key].response.failure = 'forged' }
+                missing { $changed.records.Remove($key) }
+                state { $changed.state.seed.child_credentials_absent = $false }
+                metadata { $changed.baseline_commit = '0' * 40 }
+                runtime { $changed.runtime.python = '3.14.0' }
+                source { $changed.source_sha256_lf.'controller.py' = '0' * 64 }
+                helper { $changed.capture_helper_sha256_lf = '0' * 64 }
+                exporter { $changed.exporter_sha256_lf = '0' * 64 }
+                count { $changed.capture.selected_passed++ }
+                evidence { $changed.capture.receipt_sha256 = '0' * 64 }
+                tests { $changed.capture.tests_sha256_lf = '0' * 64 }
+                wrapper { $changed.capture.wrapper_sha256_lf = '0' * 64 }
+                added { $changed.unverified = $true }
+                removed { $changed.Remove('runtime') }
+                platform { $changed.runtime.os = $(if ($changed.runtime.os -ceq 'Windows') { 'Linux' } else { 'Windows' }) }
+                platform-case { $changed.runtime.os = $changed.runtime.os.ToLowerInvariant() }
+                unsupported-platform { $changed.runtime.os = 'Darwin' }
+                revision { $changed.source_revision = '0' * 40 }
+                files { $changed.files = @{} }
+                verified { $changed.capture.verified = $false }
+            }
+            $changed.records_sha256 = Get-StageHash (ConvertTo-BackportReferenceBytes $changed.records)
+            $changed.payload_sha256 = Get-StageHash (ConvertTo-BackportReferenceBytes @{ records = $changed.records; state = $changed.state })
+            if ($changed.ContainsKey('envelope_sha256')) {
+                $changed.Remove('envelope_sha256')
+                $changed.envelope_sha256 = Get-StageHash (ConvertTo-BackportReferenceBytes $changed)
+            }
+            { Get-BackportStageReferences -Reference $changed } | Should -Throw -Because "reject $mutation even after rehashing"
+        }
+        }
+        { Get-BackportStageReferences -Reference (Join-Path $script:HarnessRoot 'untrusted.json') } | Should -Throw
     }
 
     It 'retains all correspondence and independently named helper dispositions' -Tag 'EPIC-003', 'TEST-021', 'TEST-022', 'TEST-023', 'TEST-024' {
@@ -2285,17 +2447,37 @@ Describe 'Pinned runner boundary' -Tag 'EPIC-001' {
     }
 
     It 'defaults XML outside the repository without creating it at import' {
+        foreach ($name in @('Backport.Tests.ps1', 'TestHelpers.ps1', 'Run-Tests.ps1', 'Backport.psm1', 'Invoke-Backport.ps1')) {
+            $tokens = $null
+            $errors = $null
+            $ast = [Management.Automation.Language.Parser]::ParseFile((Join-Path $PSScriptRoot $name), [ref]$tokens, [ref]$errors)
+            @($errors).Count | Should -Be 0
+            $executions = @($ast.FindAll({
+                param($node)
+                ($node -is [Management.Automation.Language.CommandAst] -and
+                    $node.GetCommandName() -match '^(Invoke-Python|python(?:3|\.exe)?$)') -or
+                ($node -is [Management.Automation.Language.InvokeMemberExpressionAst] -and
+                    $node.Extent.Text -match "ProcessStartInfo.*new\('python'\)")
+            }, $true))
+            $executions.Count | Should -Be 0 -Because "$name must not execute the reference runtime"
+        }
         $path = Get-BackportDefaultResultPath
         $path | Should -Match '\.xml$'
         [IO.Path]::GetDirectoryName($path) | Should -Be ([IO.Path]::GetTempPath().TrimEnd('\', '/'))
         Test-Path -LiteralPath $path | Should -BeFalse
-        foreach ($layout in @('one/two/three/four/five', '.github/scripts/backport-demo')) {
+        foreach ($layout in @('one/two/three/four/five', '.github/scripts/backport-demo', 'gitfile/scripts')) {
             $root = Join-Path $script:HarnessRoot ([guid]::NewGuid().ToString('N'))
             $repository = Join-Path $root 'repository'
             $scripts = Join-Path $repository $layout
             $externalTemp = Join-Path $root '_temp'
             $internalTemp = Join-Path $repository '_temp'
             $null = New-Item -ItemType Directory -Path $scripts, $externalTemp, $internalTemp, (Join-Path $repository '.git')
+            if ($layout -ceq 'gitfile/scripts') {
+                $null = New-Item -ItemType Directory -Path (Join-Path $repository 'gitfile/.git-metadata')
+                [IO.File]::WriteAllText((Join-Path $repository 'gitfile/.git'), 'gitdir: .git-metadata')
+                $internalTemp = Join-Path $repository 'gitfile/_temp'
+                $null = New-Item -ItemType Directory -Path $internalTemp
+            }
             $runner = Join-Path $scripts 'Run-Tests.ps1'
             Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'Run-Tests.ps1') -Destination $runner
             foreach ($temp in @($externalTemp, $internalTemp)) {

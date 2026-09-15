@@ -377,140 +377,166 @@ function ConvertTo-StageComments {
     return $value
 }
 
-function Invoke-PythonStageHandoff {
-    param($Test, [string[]]$Stages, [switch]$CaptureFailure, [AllowNull()]$UserResponse)
-    Assert-LocalGitFixture $Test.Fixture
-    if (-not $env:BACKPORT_TEST_BASELINE_DIR) { throw 'BACKPORT_TEST_BASELINE_DIR must select the pinned read-only Python oracle.' }
-    $payload = @{
-        environment = $Test.Environment; root = $Test.Fixture.Root; owner = $Test.Fixture.Token
-        stages = @($Stages); origin = $Test.Fixture.Origin; capture_failure = [bool]$CaptureFailure
-        git_effects = @($Test.GitEffects.ToArray())
-        api = @{}
+function ConvertTo-BackportReferenceBytes {
+    param([AllowNull()]$Value)
+    function ConvertTo-OrderedReference {
+        param([AllowNull()]$Item)
+        if ($Item -is [Collections.IDictionary]) {
+            $ordered = [ordered]@{}
+            $keys = [string[]]@($Item.psbase.Keys)
+            [Array]::Sort($keys, [StringComparer]::Ordinal)
+            foreach ($key in $keys) { $ordered[$key] = ConvertTo-OrderedReference $Item[$key] }
+            return ,$ordered
+        }
+        if ($null -ne $Item -and $Item -isnot [string] -and $Item -is [Collections.IEnumerable]) {
+            return ,@($Item | ForEach-Object { ConvertTo-OrderedReference $_ })
+        }
+        return ,$Item
     }
-    if ($PSBoundParameters.ContainsKey('UserResponse')) {
-        $payload.user_response = $UserResponse
-        # ConvertTo-Json stringifies nonfinite doubles; preserve the fake response's numeric type.
-        if ($null -ne $UserResponse -and $UserResponse.ContainsKey('login') -and
-            $UserResponse.login -is [double] -and -not [double]::IsFinite($UserResponse.login)) {
-            $payload.user_login_float = $UserResponse.login.ToString('R', [Globalization.CultureInfo]::InvariantCulture)
+    return ,[Text.Encoding]::UTF8.GetBytes((ConvertTo-Json -InputObject (ConvertTo-OrderedReference $Value) -Depth 100 -Compress))
+}
+
+function Assert-BackportReferencePath {
+    param($Test, [string]$Path)
+    $path = [IO.Path]::GetFullPath($Path)
+    if (-not $path.StartsWith($Test.Fixture.Root + [IO.Path]::DirectorySeparatorChar, [StringComparison]::Ordinal)) {
+        throw 'reference_path_outside_fixture'
+    }
+    while ($path -cne $Test.Fixture.Root) {
+        $item = Get-Item -LiteralPath $path -Force -ErrorAction SilentlyContinue
+        if ($null -ne $item -and $item.Attributes -band [IO.FileAttributes]::ReparsePoint) { throw 'reference_linked_path' }
+        $path = [IO.Path]::GetDirectoryName($path)
+    }
+    Assert-LocalGitFixture $Test.Fixture
+}
+
+function Get-BackportReferenceSnapshot {
+    param($Test)
+    Assert-LocalGitFixture $Test.Fixture
+    $artifacts = @{}
+    foreach ($name in @('plan.json', 'tracking.json', 'result.json', 'patch.bin', 'publication.json')) {
+        $path = Join-Path $Test.Config.state_dir $name
+        Assert-BackportReferencePath $Test $path
+        if ([IO.File]::Exists($path)) { $artifacts[$name] = [Convert]::ToHexString([IO.File]::ReadAllBytes($path)) }
+    }
+    $api = @{}
+    foreach ($key in @('repo', 'source', 'commits', 'target', 'actor', 'issues', 'pulls', 'comments', 'calls', 'runs')) {
+        $api[$key] = if ($key -ceq 'comments') { ConvertTo-StageComments $Test.Api.comments } else { Copy-BackportTestValue $Test.Api.$key }
+    }
+    $snapshot = @{
+        artifacts = $artifacts; api = $api; git_effects = @($Test.GitEffects.ToArray())
+        refs = (Invoke-StageFixtureGit $Test @('show-ref')); output = $null; summary = $null
+    }
+    foreach ($key in @('output', 'summary')) {
+        $path = $Test.Config[$key]
+        if ($path) {
+            Assert-BackportReferencePath $Test $path
+            if ([IO.File]::Exists($path)) { $snapshot[$key] = [IO.File]::ReadAllText($path) }
         }
     }
-    foreach ($key in @('repo', 'source', 'commits', 'target', 'actor', 'issues', 'pulls', 'comments', 'calls', 'runs')) {
-        $payload.api[$key] = if ($key -ceq 'comments') { ConvertTo-StageComments $Test.Api.comments } else { Copy-BackportTestValue $Test.Api.$key }
+    return $snapshot
+}
+
+function Get-BackportReferenceInput {
+    param($Test, [string[]]$Stages, [switch]$CaptureFailure, [AllowNull()]$UserResponse)
+    Assert-LocalGitFixture $Test.Fixture
+    $environment = Copy-BackportTestValue $Test.Environment
+    if ($environment.GH_TOKEN -cne 'offline-fixture') { throw 'synthetic_credential_required' }
+    $environment.Remove('GH_TOKEN')
+    foreach ($key in @('RUNNER_TEMP', 'STATE_DIR', 'WORK_DIR', 'GITHUB_OUTPUT', 'GITHUB_STEP_SUMMARY', 'GITHUB_SUMMARY')) {
+        if ($environment.ContainsKey($key)) {
+            $path = [IO.Path]::GetFullPath($environment[$key])
+            Assert-BackportReferencePath $Test $path
+            $environment[$key] = '<fixture-root>/' + [IO.Path]::GetRelativePath($Test.Fixture.Root, $path).Replace('\', '/')
+        }
     }
-    $inputPath = Join-Path $Test.Fixture.Root 'handoff-input.json'
-    $outputPath = Join-Path $Test.Fixture.Root 'handoff-output.json'
-    [IO.File]::WriteAllText($inputPath, (ConvertTo-Json -InputObject $payload -Depth 100 -Compress))
-    $script = @'
-import json, os, pathlib, runpy, subprocess, sys
-from unittest.mock import patch
-
-exporter, oracle, input_path, output_path = sys.argv[1:]
-tools = runpy.run_path(exporter)
-payload = json.loads(pathlib.Path(input_path).read_bytes())
-if "user_login_float" in payload:
-    payload["user_response"]["login"] = float(payload["user_login_float"])
-root = pathlib.Path(payload["root"]).resolve(strict=True)
-origin = pathlib.Path(payload["origin"]).resolve(strict=True)
-assert root.name == "fixture-" + payload["owner"]
-assert (root / ".fixture-owner").read_text() == payload["owner"]
-assert origin == root / "origin"
-assert pathlib.Path(output_path).parent.resolve() == root
-real_run = subprocess.run
-git_effects = payload["git_effects"]
-
-def guarded_run(args, **kwargs):
-    assert isinstance(args, (list, tuple)) and args[0] == "git", "unexpected_process"
-    assert "-C" in args, "git_directory_required"
-    directory = pathlib.Path(args[args.index("-C") + 1]).resolve(strict=True)
-    assert directory.is_relative_to(root), "git_directory_outside_owned_fixture"
-    for argument in args:
-        assert not str(argument).startswith(("https:", "http:", "ssh:", "git:", "file:")), "nonlocal_git"
-    for command in ("fetch", "push", "ls-remote"):
-        if command in args:
-            assert str(origin) in [str(x) for x in args], "unowned_git_origin"
-    env = kwargs.get("env", os.environ).copy()
-    env.update(GIT_ALLOW_PROTOCOL="file", GIT_PROTOCOL_FROM_USER="0",
-               GIT_AUTHOR_DATE="2000-01-01T00:00:00Z", GIT_COMMITTER_DATE="2000-01-01T00:00:00Z",
-               TEMP=str(root), TMP=str(root))
-    kwargs["env"] = env
-    result = real_run(args, **kwargs)
-    command_args = [str(x) for x in args[args.index("-C") + 2:]]
-    if directory != origin and command_args[0] in ("fetch", "ls-remote", "push"):
-        git_effects.append({
-            "arguments": [x.replace(str(origin), "<fixture-origin>") for x in command_args],
-            "auth": "GIT_CONFIG_VALUE_0" in env, "exit_code": result.returncode,
-            "stdout": result.stdout.decode("utf-8").replace(str(origin), "<fixture-origin>")})
-    return result
-
-def fixture_git(directory, *args):
-    env = {k: v for k, v in os.environ.items()
-           if not k.upper().startswith("GIT_") and k.upper() not in ("GH_TOKEN", "GITHUB_TOKEN")}
-    env.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull, GIT_TERMINAL_PROMPT="0")
-    value = guarded_run(["git", "-c", "core.hooksPath=", "-c", "protocol.allow=never",
-                         "-c", "protocol.file.allow=always", "-c", "protocol.ext.allow=never",
-                         "-C", str(directory), *args], env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True)
-    return value.stdout.decode().strip()
-
-with tools["load_baseline"](pathlib.Path(oracle)) as (c, baseline):
-    api = baseline.FakeGitHub(origin, payload["api"]["source"]["head"]["sha"],
-                             payload["api"]["source"]["merge_commit_sha"], payload["api"]["target"],
-                             [x["sha"] for x in payload["api"]["commits"]])
-    for key, value in payload["api"].items():
-        if key == "comments":
-            value = {int(k): v for k, v in value.items()}
-        elif key == "calls":
-            value = [(x["method"], x["path"], x["data"]) for x in value]
-        setattr(api, key, value)
-    original_request = api.request
-    def fixture_request(method, path, data=None):
-        value = original_request(method, path, data)
-        if method == "GET" and path.startswith("/users/") and "user_response" in payload:
-            return json.loads(json.dumps(payload["user_response"]))
-        return value
-    cfg = c.Config.from_env(payload["environment"])
-    controller = c.Controller(cfg, api=api, repo_factory=lambda config: c.GitRepo(config, origin=str(origin), allow_file=True))
-    outcomes, failure = [], None
-    with patch.object(c.GitHub, "request", side_effect=AssertionError("network_forbidden")), \
-         patch("urllib.request.OpenerDirector.open", side_effect=AssertionError("network_forbidden")), \
-         patch.object(c.subprocess, "run", side_effect=guarded_run), \
-         patch.object(api, "request", new=fixture_request), \
-         patch.object(baseline, "git", new=fixture_git):
-        try:
-            for stage in payload["stages"]:
-                assert stage in ("validate", "track", "prepare", "publish")
-                outcomes.append(getattr(controller, stage)())
-        except c.Failure as exc:
-            if not payload["capture_failure"]:
-                raise
-            failure = str(exc)
-    response = {"outcomes": outcomes, "failure": failure, "git_effects": git_effects,
-                "api": {key: getattr(api, key) for key in payload["api"]}}
-    response["api"]["calls"] = [{"method": m, "path": p, "data": d} for m, p, d in api.calls]
-    pathlib.Path(output_path).write_bytes(c.encoded(response))
-'@
-    $environment = New-LocalGitEnvironment $Test.Fixture
-    foreach ($key in @($environment.Keys)) {
-        if ($key -match '^(GIT_|GH_TOKEN$|GITHUB_TOKEN$|PYTHONPATH$)') { $environment.Remove($key) }
+    $input = @{
+        environment = $environment; stages = @($Stages); capture_failure = [bool]$CaptureFailure
+        before = Get-BackportReferenceSnapshot $Test
+        fixture = @{ head = $Test.Fixture.Head; source = $Test.Fixture.Source; target = $Test.Fixture.Target; commits = @($Test.Fixture.Commits) }
     }
-    $result = Invoke-HarnessProcess -FileName (@(Get-Command python -CommandType Application)[0].Source) `
-        -Environment $environment -TimeoutSeconds 240 -Arguments @('-I', '-B', '-c', $script,
-        (Join-Path $PSScriptRoot 'Export-PythonBaseline.py'), $env:BACKPORT_TEST_BASELINE_DIR, $inputPath, $outputPath)
-    if ($result.ExitCode -ne 0) { throw ('python_stage_handoff_failed: ' + $result.Stderr) }
-    if ($result.Stdout) { throw 'unexpected_python_stage_output' }
-    $response = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText($outputPath)) -AsHashtable -Depth 100
-    $Test.GitEffects.Clear()
-    foreach ($item in $response.git_effects) { $Test.GitEffects.Add($item) }
-    foreach ($key in @('repo', 'source', 'target', 'actor')) { $Test.Api.$key = $response.api[$key] }
-    foreach ($key in @('commits', 'issues', 'pulls', 'calls', 'runs')) {
-        $Test.Api.$key.Clear()
-        foreach ($item in $response.api[$key]) { $Test.Api.$key.Add($item) }
+    if ($PSBoundParameters.ContainsKey('UserResponse')) {
+        $input.user_response_json = [Text.Encoding]::UTF8.GetString((ConvertTo-BackportReferenceBytes $UserResponse))
+        if ($null -ne $UserResponse -and $UserResponse.ContainsKey('login') -and
+            $UserResponse.login -is [double] -and -not [double]::IsFinite($UserResponse.login)) {
+            $input.user_login_float = $UserResponse.login.ToString('R', [Globalization.CultureInfo]::InvariantCulture)
+        }
     }
-    $Test.Api.comments.Clear()
-    foreach ($key in $response.api.comments.Keys) {
-        $items = [Collections.Generic.List[object]]::new()
-        foreach ($item in $response.api.comments[$key]) { $items.Add($item) }
-        $Test.Api.comments[[int]$key] = $items
+    return $input
+}
+
+function Get-BackportStageReferences {
+    param([AllowNull()]$Reference)
+    if (-not $PSBoundParameters.ContainsKey('Reference')) {
+        $platform = if ($IsWindows) { 'Windows' } elseif ($IsLinux) { 'Linux' } else { throw 'unsupported_reference_platform' }
+        $parity = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText((Join-Path $PSScriptRoot 'parity.json'))) -AsHashtable -Depth 100
+        $Reference = if ($platform -ceq 'Windows') { $parity.stage_reference } else { $parity.stage_reference_linux }
+        if ($Reference.runtime.os -cne $platform) { throw 'invalid_stage_reference_platform' }
+    }
+    if ($reference -isnot [Collections.IDictionary] -or $reference.schema -ne 1 -or
+        $reference.baseline_commit -cne '514500f55f064aa9ab86607e6d0803f2abd6376c') { throw 'invalid_stage_reference' }
+    if ($reference.runtime.os -cnotin @('Windows', 'Linux')) { throw 'invalid_stage_reference_platform' }
+    $expectedEnvelopeHash = '02b30d6e124c49bf167f994d4a2512231e26a0ce01309b30d7dd574fba5ad282'
+    $envelope = $reference
+    if ($reference.runtime.os -ceq 'Linux') {
+        $expectedEnvelopeHash = '463edd62c57358932ccd3e066d2a63fb345c32c7d41178e8093a27b61b112360'
+        if ($reference.envelope_sha256 -cne $expectedEnvelopeHash) { throw 'stage_reference_hash_mismatch' }
+        $envelope = @{}
+        foreach ($key in $reference.psbase.Keys) {
+            if ($key -cne 'envelope_sha256') { $envelope[$key] = $reference[$key] }
+        }
+    }
+    $envelopeHash = Get-StageHash (ConvertTo-BackportReferenceBytes $envelope)
+    if ($envelopeHash -cne $expectedEnvelopeHash) {
+        throw 'stage_reference_hash_mismatch'
+    }
+    $payloadHash = Get-StageHash (ConvertTo-BackportReferenceBytes @{ records = $reference.records; state = $reference.state })
+    if ($payloadHash -cne $reference.payload_sha256) { throw 'stage_reference_hash_mismatch' }
+    $bytes = ConvertTo-BackportReferenceBytes $reference.records
+    if ((Get-StageHash $bytes) -cne $reference.records_sha256) { throw 'stage_reference_hash_mismatch' }
+    return $reference
+}
+
+function Invoke-ReferenceStageHandoff {
+    param($Test, [string[]]$Stages, [switch]$CaptureFailure, [AllowNull()]$UserResponse)
+    $input = Get-BackportReferenceInput @PSBoundParameters
+    $key = Get-StageHash (ConvertTo-BackportReferenceBytes $input)
+    $references = Get-BackportStageReferences
+    if (-not $references.records.ContainsKey($key)) { throw 'uncaptured_stage_reference_input' }
+    $reference = $references.records[$key]
+    if ((Get-StageHash (ConvertTo-BackportReferenceBytes $reference.input)) -cne $key) { throw 'stage_reference_input_mismatch' }
+    $filter = $Test.HttpFilter
+    if ($PSBoundParameters.ContainsKey('UserResponse')) {
+        $Test.HttpFilter = {
+            param($fixture, $method, $path, $data)
+            $value = Invoke-FakeGitHub $fixture.Api $method $path $data
+            if ($method -ceq 'GET' -and $path.StartsWith('/users/', [StringComparison]::Ordinal)) { return ,$UserResponse }
+            return ,$value
+        }
+    }
+    $outcomes = [Collections.Generic.List[object]]::new()
+    $failure = $null
+    try {
+        foreach ($stage in $Stages) { $outcomes.Add((Invoke-BackportTestStage $Test $stage)) }
+    }
+    catch {
+        if (-not $CaptureFailure) { throw }
+        $failure = $_.Exception.Message
+    }
+    finally { $Test.HttpFilter = $filter }
+    $snapshot = Get-BackportReferenceSnapshot $Test
+    $response = @{ outcomes = @($outcomes.ToArray()); failure = $failure; api = $snapshot.api; git_effects = $snapshot.git_effects }
+    foreach ($pair in @(@{ actual = $response; expected = $reference.response; name = 'response' },
+        @{ actual = $snapshot; expected = $reference.after; name = 'receipt' })) {
+        if ((Get-StageHash (ConvertTo-BackportReferenceBytes $pair.actual)) -cne
+            (Get-StageHash (ConvertTo-BackportReferenceBytes $pair.expected))) {
+            throw ('stage_reference_' + $pair.name + '_mismatch')
+        }
+    }
+    foreach ($name in $reference.after.artifacts.Keys) {
+        $path = Join-Path $Test.Config.state_dir $name
+        Assert-BackportReferencePath $Test $path
+        [IO.File]::WriteAllBytes($path, [Convert]::FromHexString($reference.after.artifacts[$name]))
     }
     return $response
 }
@@ -1136,63 +1162,26 @@ function New-BackportProcessFixtureStartInfo {
     $info
 }
 
-function Invoke-PythonStateHandoff {
-    param([string]$BaselineDirectory, [string]$StateDirectory, [string]$Mode)
-    if (-not $BaselineDirectory) { throw 'BACKPORT_TEST_BASELINE_DIR must select the pinned read-only Python oracle.' }
-    if ([Array]::IndexOf[string](@('seed', 'verify'), $Mode) -lt 0) { throw 'invalid_handoff_mode' }
-    $script = @'
-import json, os, pathlib, runpy, sys
-from unittest.mock import patch
-
-assert not any(name.upper().startswith("GIT_") or name.upper() in ("GH_TOKEN", "GITHUB_TOKEN") for name in os.environ)
-exporter, oracle, state, mode = sys.argv[1:]
-tools = runpy.run_path(exporter)
-with tools["load_baseline"](pathlib.Path(oracle)) as (c, _):
-    # Transport is forbidden even if future initialization accidentally invokes it.
-    with patch.object(c.GitHub, "request", side_effect=AssertionError("network_forbidden")), \
-         patch.object(c.subprocess, "run", side_effect=AssertionError("process_forbidden")):
-        directory = pathlib.Path(state)
-        cfg = c.Config(7, False, 59250993, "AleksanderGladkov", (59250993,),
-                       "123", "1", directory, directory.parent / "unused-work", "synthetic-only")
-        controller = c.Controller(cfg)
-        reference = json.loads((pathlib.Path(exporter).parent / "parity.json").read_bytes())
-        shapes = {"plan": ("plan.json", c.PLAN_FIELDS),
-                  "tracking-tracked": ("tracking.json", c.TRACK_FIELDS),
-                  "result-applied": ("result.json", c.RESULT_FIELDS),
-                  "publication": ("publication.json", {"plan_hash", "attempted"})}
-        for vector in reference["vectors"]:
-            if vector["id"] not in shapes:
-                continue
-            name, fields = shapes[vector["id"]]
-            if mode == "seed":
-                controller.save(name, vector["value"])
-            value = controller.load(name, fields)
-            assert c.encoded(value).hex() == vector["utf8_hex"]
-            assert (directory / name).read_bytes().hex() == vector["utf8_hex"]
-            assert c.digest(c.encoded(value)) == vector["sha256"]
-'@
-    $info = [Diagnostics.ProcessStartInfo]::new('python')
-    foreach ($argument in @('-I', '-B', '-c', $script, (Join-Path $PSScriptRoot 'Export-PythonBaseline.py'),
-        $BaselineDirectory, $StateDirectory, $Mode)) { $info.ArgumentList.Add($argument) }
-    $info.UseShellExecute = $false
-    $info.RedirectStandardOutput = $info.RedirectStandardError = $true
-    foreach ($name in @($info.Environment.psbase.Keys)) {
-        if ($name.StartsWith('GIT_', [StringComparison]::OrdinalIgnoreCase) -or
-            [string]::Equals($name, 'GH_TOKEN', [StringComparison]::OrdinalIgnoreCase) -or
-            [string]::Equals($name, 'GITHUB_TOKEN', [StringComparison]::OrdinalIgnoreCase) -or
-            [string]::Equals($name, 'PYTHONPATH', [StringComparison]::OrdinalIgnoreCase)) { $null = $info.Environment.Remove($name) }
+function Invoke-ReferenceStateHandoff {
+    param([string]$StateDirectory, [ValidateSet('seed', 'verify')][string]$Mode)
+    $reference = Get-BackportStageReferences
+    $record = $reference.state[$Mode]
+    if ($null -eq $record -or (Get-StageHash (ConvertTo-BackportReferenceBytes $record)) -cne $reference.state_sha256[$Mode]) {
+        throw 'state_reference_hash_mismatch'
     }
-    $process = [Diagnostics.Process]::Start($info)
-    try {
-        $stdout = $process.StandardOutput.ReadToEndAsync()
-        $stderr = $process.StandardError.ReadToEndAsync()
-        if (-not $process.WaitForExit(60000)) {
-            $process.Kill($true)
-            $process.WaitForExit()
-            throw 'python_handoff_timeout'
+    $parity = ConvertFrom-Json -InputObject ([IO.File]::ReadAllText((Join-Path $PSScriptRoot 'parity.json'))) -AsHashtable -Depth 100
+    foreach ($id in @('plan', 'tracking-tracked', 'result-applied', 'publication')) {
+        $vector = @($parity.vectors | Where-Object id -CEQ $id)[0]
+        $name = $id.Split('-')[0] + '.json'
+        $bytes = [Convert]::FromHexString($record.artifacts[$name])
+        if ((Get-StageHash $bytes) -cne $vector.sha256 -or
+            [Convert]::ToHexString($bytes).ToLowerInvariant() -cne $vector.utf8_hex) { throw 'state_reference_vector_mismatch' }
+        if ($Mode -ceq 'seed') {
+            $null = [IO.Directory]::CreateDirectory($StateDirectory)
+            [IO.File]::WriteAllBytes((Join-Path $StateDirectory $name), $bytes)
         }
-        if ($process.ExitCode -ne 0) { throw ('python_handoff_failed: ' + $stderr.GetAwaiter().GetResult()) }
-        if ($stdout.GetAwaiter().GetResult()) { throw 'unexpected_python_handoff_output' }
+        if ([Convert]::ToHexString([IO.File]::ReadAllBytes((Join-Path $StateDirectory $name))) -cne [Convert]::ToHexString($bytes)) {
+            throw 'state_reference_bytes_mismatch'
+        }
     }
-    finally { $process.Dispose() }
 }
