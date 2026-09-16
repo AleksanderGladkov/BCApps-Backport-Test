@@ -26,7 +26,7 @@ BeforeAll {
         }) + @($parity.required_migration_ids | ForEach-Object {
             [pscustomobject]@{ Name = "synthetic migration $_"; Tag = @($_); Result = 'Passed'; Executed = $true }
         })
-        $tests = $tests[0..66] + @((1..9 + 11..13) | ForEach-Object {
+        $tests = $tests[0..66] + @(1..13 | ForEach-Object {
             [pscustomobject]@{ Name = "synthetic label $_"; Tag = @('LT-{0:d2}' -f $_); Result = 'Passed'; Executed = $true }
         }) + $tests[67..($tests.Count - 1)]
         [pscustomobject]@{
@@ -874,7 +874,7 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
         Set-BackportTestEventFile $T.Environment $event
         Assert-BackportRequestRejected $T
     }
-    It 'retains authoritative current-user IDs for label reruns: <Current>' -Tag 'L-001', 'LT-04', 'L-002', 'LT-11' -ForEach @(
+    It 'retains authoritative current-user IDs for label reruns: <Current>' -Tag 'L-001', 'LT-04', 'L-002', 'LT-11', 'L-003' -ForEach @(
         @{ Current = 59250993; Allowed = $true }, @{ Current = 12; Allowed = $true }
         @{ Current = 13; Allowed = $false }, @{ Current = '59250993'; Allowed = $false }
         @{ Current = $true; Allowed = $false }
@@ -2144,7 +2144,7 @@ Describe 'Label workflow admission contract' -Tag 'L-001', 'LT-05' {
         (Get-BackportWorkflowTestProjection $production pull_request_target $event).group |
             Should -BeExactly 'backport-demo-1369849596-7-29'
     }
-    It 'admits only the explicit feature edits while preserving the historical baseline gate' {
+    It 'admits only the explicit feature edits while preserving the historical baseline gate' -Tag 'L-003', 'LT-10' {
         Assert-BackportWorkflowBaseline $script:Reference $production $testsWorkflow
         foreach ($edit in Get-BackportLabelWorkflowEdits) {
             [regex]::Matches($production, [regex]::Escape($edit.After)).Count | Should -Be $edit.Count
@@ -2158,17 +2158,64 @@ Describe 'Label workflow admission contract' -Tag 'L-001', 'LT-05' {
         $production | Should -Match '(?m)^  prepare:\n    needs: track$'
         $production | Should -Match '(?m)^  publish:\n    needs: prepare$'
         [regex]::Matches($production, 'ref: \$\{\{ github.workflow_sha \}\}\n          persist-credentials: false\n          sparse-checkout: .github/scripts/backport-demo').Count | Should -Be 4
+        $production | Should -Match '(?m)^permissions: \{\}$'
+        $production | Should -Match '(?m)^  cancel-in-progress: false$'
+        @([regex]::Matches($production, '(?m)^  (\w+):$') | Where-Object {
+            $_.Index -gt $production.IndexOf("`njobs:`n", [StringComparison]::Ordinal)
+        } | ForEach-Object { $_.Groups[1].Value }) | Should -Be @('validate', 'track', 'prepare', 'publish')
+        $contracts = @(
+            @{ Stage = 'validate'; Permissions = "contents: read`n      pull-requests: read"; Input = $null; Output = 'plan'; Missing = 'ignore' }
+            @{ Stage = 'track'; Permissions = "actions: read`n      contents: read`n      pull-requests: read`n      issues: write"; Input = 'plan'; Output = 'tracking'; Missing = 'error' }
+            @{ Stage = 'prepare'; Permissions = "contents: read`n      pull-requests: read`n      issues: read"; Input = 'tracking'; Output = 'result'; Missing = 'error' }
+            @{ Stage = 'publish'; Permissions = "actions: read`n      contents: write`n      issues: write`n      pull-requests: write"; Input = 'result'; Output = 'publication'; Missing = 'error' }
+        )
+        foreach ($contract in $contracts) {
+            $job = [regex]::Match($production, "(?ms)^  $($contract.Stage):\n.*?(?=^  \w+:|\z)").Value
+            $job | Should -Match ([regex]::Escape("    permissions:`n      $($contract.Permissions)`n    steps:"))
+            $checkout = [regex]::Match($job, '(?m)^          ref: (.+)\n          persist-credentials: false\n          sparse-checkout: (.+)$')
+            $checkout.Success | Should -BeTrue
+            $checkout.Groups[1].Value | Should -BeExactly '${{ github.workflow_sha }}'
+            $checkout.Groups[2].Value | Should -BeExactly '.github/scripts/backport-demo'
+            Test-Path -LiteralPath (Join-Path $PSScriptRoot 'request-policy.json') -PathType Leaf | Should -BeTrue
+            $job | Should -Match ([regex]::Escape("run: ./.github/scripts/backport-demo/Invoke-Backport.ps1 -Stage $($contract.Stage)"))
+            $artifact = '          name: backport-' + $contract.Output + '-${{ github.run_attempt }}'
+            $job | Should -Match ([regex]::Escape("        if: always()`n        with:`n$artifact`n" +
+                '          path: ${{ runner.temp }}/backport-state' + "`n          if-no-files-found: $($contract.Missing)`n          retention-days: 7"))
+            if ($contract.Input) {
+                $artifact = '          name: backport-' + $contract.Input + '-${{ github.run_attempt }}'
+                $job | Should -Match ([regex]::Escape("        with:`n$artifact`n" + '          path: ${{ runner.temp }}/backport-state'))
+            }
+        }
+        $testsWorkflow | Should -Match '(?m)^on:\n  workflow_dispatch:\n\npermissions:\n  contents: read$'
+        $testsWorkflow | Should -Match ([regex]::Escape(
+            "          sparse-checkout: |`n            .github/scripts/backport-demo`n" +
+            "            .github/workflows/backport-demo.yml`n            .github/workflows/backport-demo-tests.yml`n          sparse-checkout-cone-mode: false"))
+        $entry = [regex]::Match($testsWorkflow, '(?m)^          & (.+Run-Tests.ps1 .+)$').Groups[1].Value
+        $entry | Should -BeExactly './.github/scripts/backport-demo/Run-Tests.ps1 -ResultPath (Join-Path $env:RUNNER_TEMP ''backport-pester.xml'')'
     }
-    It 'requires every implemented label ID without reserving LT-10 prematurely' -Tag 'L-002', 'LT-06', 'LT-11' {
+    It 'requires all final label IDs to execute and pass without diluting historical coverage' -Tag 'L-002', 'LT-06', 'LT-11', 'L-003', 'LT-10' {
         $complete = Test-BackportAcceptance (New-SyntheticResult) (New-SyntheticParity)
         $complete.Accepted | Should -BeTrue
-        $complete.LabelPassed | Should -Be 12
-        foreach ($id in (1..9 + 11..13)) {
-            $result = New-SyntheticResult
-            $tag = 'LT-{0:d2}' -f $id
-            $result.Tests = @($result.Tests | Where-Object { $_.Tag -cnotcontains $tag })
-            $result.TotalCount = $result.PassedCount = $result.Tests.Count
-            (Test-BackportAcceptance $result (New-SyntheticParity)).Errors -join ';' | Should -Match $tag
+        $complete.LabelPassed | Should -Be 13
+        $complete.Message | Should -BeExactly 'Full acceptance: 67/67 distinct baseline cases; 12/12 migration IDs; 13/13 label IDs.'
+        foreach ($id in 1..13) {
+            foreach ($state in @('missing', 'Skipped', 'NotRun', 'Failed', 'unexecuted')) {
+                $result = New-SyntheticResult
+                $tag = 'LT-{0:d2}' -f $id
+                $test = @($result.Tests | Where-Object { $_.Tag -ccontains $tag })[0]
+                switch ($state) {
+                    missing {
+                        $result.Tests = @($result.Tests | Where-Object { $_.Tag -cnotcontains $tag })
+                        $result.TotalCount = $result.PassedCount = $result.Tests.Count
+                    }
+                    unexecuted { $test.Executed = $false }
+                    default { $test.Result = $state }
+                }
+                $gate = Test-BackportAcceptance $result (New-SyntheticParity)
+                $gate.Accepted | Should -BeFalse
+                $gate.LabelPassed | Should -Be 12
+                $gate.Errors -join ';' | Should -Match $(if ($state -ceq 'missing') { $tag } else { [regex]::Escape($test.Name) })
+            }
         }
     }
 }
@@ -2195,29 +2242,36 @@ Describe 'Offline workflow baseline and EPIC-003 runner selection' -Tag 'EPIC-00
             }
         }
     }
-    It 'selects only EPIC-003 through the real runner without promoting development to acceptance' {
+    It 'selects only <SelectedEpic> through the real runner without promoting development to acceptance' -Tag 'L-003', 'LT-10' -ForEach @(
+        @{ SelectedEpic = 'EPIC-003' }
+        @{ SelectedEpic = 'L-003' }
+    ) {
+        $script:SelectedRunnerEpic = $SelectedEpic
         $script:CapturedStageConfiguration = $null
         Mock Invoke-Pester {
             $script:CapturedStageConfiguration = $Configuration
             if (@($Configuration.Filter.Tag.Value).Count -eq 0) { return New-SyntheticResult }
             $result = New-SyntheticDevelopmentResult
-            $result.Tests[0].Tag = @('EPIC-003')
+            $result.Tests[0].Tag = @($script:SelectedRunnerEpic)
             $result
         }
         Mock Import-Module {} -ParameterFilter { $Name -ceq 'Pester' -and $RequiredVersion -eq '5.7.1' }
         Mock Write-Host {}
-        $path = Join-Path $script:HarnessRoot 'epic003-selection.xml'
-        $gate = Invoke-BackportTests -Epic EPIC-003 -ResultPath $path
+        $path = Join-Path $script:HarnessRoot 'epic-selection.xml'
+        $gate = Invoke-BackportTests -Epic $SelectedEpic -ResultPath $path
         $gate.ExitCode | Should -Be 0
         $gate.Mode | Should -BeExactly 'Development'
-        $gate.Message | Should -BeExactly 'Development EPIC-003 - NOT full acceptance.'
-        @($script:CapturedStageConfiguration.Filter.Tag.Value) | Should -Be @('EPIC-003')
+        $gate.Message | Should -BeExactly "Development $SelectedEpic - NOT full acceptance."
+        @($script:CapturedStageConfiguration.Filter.Tag.Value) | Should -Be @($SelectedEpic)
         @($script:CapturedStageConfiguration.Filter.FullName.Value).Count | Should -Be 0
         $script:CapturedStageConfiguration.TestResult.OutputPath.Value | Should -BeExactly $path
         $script:CapturedStageConfiguration.TestDrive.Enabled.Value | Should -BeFalse
         $gate = Invoke-BackportTests -ResultPath $path
         $gate.ExitCode | Should -Be 0
         $gate.Mode | Should -BeExactly 'FullAcceptance'
+        $gate.BaselinePassed | Should -Be 67
+        $gate.MigrationPassed | Should -Be 12
+        $gate.LabelPassed | Should -Be 13
         @($script:CapturedStageConfiguration.Run.Path.Value) | Should -Be @((Join-Path $PSScriptRoot 'Backport.Tests.ps1'))
         @($script:CapturedStageConfiguration.Filter.Tag.Value).Count | Should -Be 0
         @($script:CapturedStageConfiguration.Filter.FullName.Value).Count | Should -Be 0
@@ -2228,7 +2282,7 @@ Describe 'Offline workflow baseline and EPIC-003 runner selection' -Tag 'EPIC-00
             $Name -ceq 'Pester' -and $RequiredVersion -eq '5.7.1'
         }
     }
-    It 'verifies the pinned checked-out workflow bytes with LF and CRLF checkouts' -Tag 'TEST-017' {
+    It 'verifies the pinned checked-out workflow bytes with LF and CRLF checkouts' -Tag 'TEST-017', 'L-003', 'LT-10' {
         foreach ($newline in @("`n", "`r`n")) {
             Assert-BackportWorkflowBaseline -Parity $script:Reference `
                 -ProductionText $script:WorkflowTexts.production.Replace("`n", $newline) `
@@ -2456,7 +2510,7 @@ Describe 'Offline workflow baseline and EPIC-003 runner selection' -Tag 'EPIC-00
                 Should -Throw -ExpectedMessage 'workflow_baseline_mismatch' -Because "final workflow must retain: $required"
         }
     }
-    It 'rejects changes to every protected production and manual read-only test block' -Tag 'TEST-017' {
+    It 'rejects changes to every protected production and manual read-only test block' -Tag 'TEST-017', 'L-003', 'LT-10' {
         foreach ($kind in @('production', 'tests')) {
             foreach ($block in $script:Reference.workflow_baseline[$kind].protected_blocks) {
                 $texts = Copy-BackportTestValue $script:WorkflowTexts
@@ -2486,7 +2540,7 @@ Describe 'Offline workflow baseline and EPIC-003 runner selection' -Tag 'EPIC-00
             }
         }
     }
-    It 'rejects changed identity and incomplete or diluted protected-block reference data' -Tag 'TEST-017' {
+    It 'rejects changed identity and incomplete or diluted protected-block reference data' -Tag 'TEST-017', 'L-003', 'LT-10' {
         foreach ($kind in @('production', 'tests')) {
             foreach ($mutation in @('path', 'hash', 'missing', 'duplicate', 'diluted')) {
                 $reference = Copy-BackportTestValue $script:Reference
@@ -3046,7 +3100,7 @@ AfterAll {
     }
 }
 
-Describe 'Acceptance gate using simulated execution results only' -Tag 'EPIC-001' {
+Describe 'Acceptance gate using simulated execution results only' -Tag 'EPIC-001', 'L-003', 'LT-10' {
     BeforeEach {
         Mock Invoke-WebRequest { throw 'network_forbidden' }
         Mock Invoke-RestMethod { throw 'network_forbidden' }

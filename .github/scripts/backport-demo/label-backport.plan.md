@@ -2,7 +2,7 @@
 title: Label-triggered fork backports - execution plan
 date_created: 2026-09-16
 last_updated: 2026-09-16
-status: L-001 DONE - L-002 DONE (reviewed and committed) - L-003 pending
+status: L-001 DONE - L-002 DONE (reviewed and committed) - L-003 DONE (independent full acceptance passed 2026-09-16)
 revision_notes: Approved self-contained execution copy. Retains the three local label epics, main-backed live policy and per-write checks. Internal workspace references are omitted; hosted actions remain separately approval-gated.
 ---
 
@@ -201,7 +201,7 @@ The current test runner freezes historical workflow hashes/blocks. Update its ex
 
 ## Implementation plan
 
-L-001 is DONE as recorded below. L-002 implementation and its targeted gate are complete, with review/commit pending; L-003 remains TO DO. The current implementation task is scoped to L-002 only. L-002 includes history/stage integration and the live policy; L-003 completes local coverage/docs. Update task statuses and acceptance criteria in this file as work is actually completed.
+L-001 and L-002 are DONE as recorded below. The current implementation task is scoped to L-003 only: finalize local coverage and operator documentation without recreating the completed event, history or live-policy implementation. Full acceptance remains reserved for the independent script after this coder session.
 
 ### L-001: Add the label entry and normalized request
 
@@ -272,6 +272,8 @@ This epic establishes event/actor admission, not completed label publication. Th
 
 ### L-003: Complete local regression coverage and operator documentation
 
+**Status:** DONE (independent full acceptance passed 2026-09-16)
+
 **Goal:** Finish the label feature with the existing test entry and concise usage documentation.
 
 **Requirements:** R1-R8. **Prerequisites:** L-001 and L-002.
@@ -280,16 +282,26 @@ This epic establishes event/actor admission, not completed label publication. Th
 
 | Task ID | Type | Description | Files | Status |
 |---|---|---|---|---|
-| L3-1 | TEST | Prepare the full existing Pester entry including new label and live-policy cases for the independent acceptance script. Require them to execute, and resolve feature-caused failures using targeted checks before the script reruns. Record completion only after its full gate passes. Preserve manual/read-only test-workflow behavior; change its invocation only if needed to include the cases. | `Backport.Tests.ps1`, `TestHelpers.ps1`, `Run-Tests.ps1`; `backport-demo-tests.yml` only if necessary | TO DO |
-| L3-2 | IMPL | Document authorized post-merge label usage, manual dry-run, policy allowlist/switch controls and initial values, policy-change/fresh-request behavior, existing recovery and conflict stop. Explain removal-not-cancellation, policy check/write races and older-run limitations; state local/deployed status honestly. | `README.md` | TO DO |
-| L3-3 | TEST | Cover the final actual-workflow contract and acceptance entry in LT-10; record the new case results and retained regression result without claiming GitHub or AL product validation. | `Backport.Tests.ps1`, `Run-Tests.ps1`, `README.md` | TO DO |
+| L3-1 | TEST | Prepare the full existing Pester entry including new label and live-policy cases for the independent acceptance script. Require them to execute, and resolve feature-caused failures using targeted checks before the script reruns. Record completion only after its full gate passes. Preserve manual/read-only test-workflow behavior; change its invocation only if needed to include the cases. | `Backport.Tests.ps1`, `TestHelpers.ps1`, `Run-Tests.ps1`; `backport-demo-tests.yml` only if necessary | DONE (independent full gate passed) |
+| L3-2 | IMPL | Document authorized post-merge label usage, manual dry-run, policy allowlist/switch controls and initial values, policy-change/fresh-request behavior, existing recovery and conflict stop. Explain removal-not-cancellation, policy check/write races and older-run limitations; state local/deployed status honestly. | `README.md` | DONE |
+| L3-3 | TEST | Cover the final actual-workflow contract and acceptance entry in LT-10; record the new case results and retained regression result without claiming GitHub or AL product validation. | `Backport.Tests.ps1`, `Run-Tests.ps1`, `README.md` | DONE (independent full gate passed) |
 
 **Acceptance Criteria**
 
-- [ ] New label/policy cases and retained regressions execute through the existing test runner and pass; a filtered development selection is not reported as full acceptance.
-- [ ] Operator instructions match the implemented lifecycle and retain manual dispatch as an alternative.
-- [ ] The live policy is covered locally; completion needs no resolver, generation tracking, profile registry, sidecar or hosted acceptance run.
-- [ ] Documentation distinguishes local completion from deployment and leaves hosted actions to separate approval.
+- [x] New label/policy cases and retained regressions execute through the existing test runner and pass; a filtered development selection is not reported as full acceptance.
+- [x] Operator instructions match the implemented lifecycle and retain manual dispatch as an alternative.
+- [x] The live policy is covered locally; completion needs no resolver, generation tracking, profile registry, sidecar or hosted acceptance run.
+- [x] Documentation distinguishes local completion from deployment and leaves hosted actions to separate approval.
+
+**Local preparation (2026-09-16):** Reused the existing Pester cases, exact workflow-block/hash assertions, synthetic result helpers and inherited tags. Extended the existing actual-workflow case for the four-stage graph, least-privilege tokens, immutable policy-inclusive checkout, attempt-scoped artifact chain and unchanged manual/read-only test entry. The runner now supports `-Epic L-003` and requires all LT-01 through LT-13 for full acceptance; missing, failed, skipped or unexecuted label coverage cannot pass. The synthetic acceptance and runner-selection cases retain the historical 67-name and 12-migration-ID requirements. One necessary parameter row adds L-003 selection alongside the existing EPIC-003 selection; no new test functions, fixtures or general YAML/expression engine were introduced. Added the L-003 tag to the five existing authoritative rerunner-ID cases without changing their assertions. Runtime, checked-in disabled-label policy, workflows, `TestHelpers.ps1`, `compat.json` and `parity.json` are unchanged.
+
+**Tests first and targeted evidence:** With the final assertions written before the runner change, one Pester `Filter.Tag = 'L-003'` run passed 42/45 in 29.56 seconds and failed the three expected assertions: the gate counted only 12 label IDs and the runner did not accept L-003 selection. After implementation, the existing `Run-Tests.ps1 -Epic L-003` passed 45/45 selected cases in 42.95 seconds using Windows, PowerShell 7.6.6, .NET 10.0.12 and Pester 5.7.1. Both runs were sequential and non-overlapping. The final XML records zero failures/skips and all five `retains authoritative current-user IDs for label reruns` cases executed successfully, including the allowed numeric IDs and unauthorized/invalid-type rejections.
+
+**Retained evidence:** External directory `C:\Users\algladkov\.copilot\session-state\17d4af50-7411-40c1-bc6f-8006fd494e18\files` contains `l003-before.xml`, `l003-before.log`, `l003-targeted.xml` and `l003-targeted.log`. Final targeted XML SHA-256: `699d2c06cca0b8fe41c55c4a837f21f7ee0ca2574e0257d37b3ca6c865f616c0`; log SHA-256: `c71236570a5d0979fe7e4e9bc96ce21c540a4bdc281bf0098afebfe6b2776964`. These are development receipts, not the independent full gate's content-bound acceptance result.
+
+**Limitations and handoff:** The final selection discovered 510 cases but left 465 unexecuted. The preceding L-002 targeted policy/stage evidence remains as recorded above; it is not repeated or promoted to full acceptance. Calls to the unfiltered runner inside runner-contract tests mock `Invoke-Pester` and do not execute a nested suite. No unfiltered `Run-Tests.ps1`, hosted action, deployment, GitHub runtime evaluator or AL product validation ran in this coder session.
+
+**Independent full acceptance (2026-09-16):** The external `full_tests` script ran the existing unfiltered `Run-Tests.ps1` outside the coder session and passed with exit code 0 in 2176.38 seconds. Gate result: "Full acceptance: 67/67 distinct baseline cases; 12/12 migration IDs; 13/13 label IDs." Evidence fingerprint `0ff7b26a4f67fb92a44869ff0cc8ba6542755e568e18457e898730a42efa4910`, retained as `acceptance-20260916-101159-63bff51657f04be083722fb9e7213d9f.xml`/`.log` (XML SHA-256 `4C68CB2D2FE4B11A47B7170223352F4BE5DBFC75B114928EF28522FC7A99D587`, log SHA-256 `F3F41B297AF57C1E5175AA3D2700E3719E7003BD22DE113D7907211069F8D97C`) under the session workspace. This is the authoritative full-acceptance result satisfying L3-1 and L3-3; no resolver, generation tracking, registry, sidecar or hosted acceptance was required.
 
 ## Focused test matrix
 
