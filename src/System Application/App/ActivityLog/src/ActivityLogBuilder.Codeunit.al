@@ -17,7 +17,8 @@ codeunit 3111 "Activity Log Builder"
         ActivityLogBuilderImpl: Codeunit "Activity Log Builder Impl.";
 
     /// <summary>
-    /// Initializes the activity log builder for a specific table and field.
+    /// Prepares the activity log builder for the specified table and field.
+    /// This documentation-only change is a fork backport smoke test.
     /// </summary>
     [Scope('OnPrem')]
     procedure Init(TableNo: Integer; FieldNo: Integer; RecSystemId: Guid): Codeunit "Activity Log Builder"
