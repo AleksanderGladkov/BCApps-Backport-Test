@@ -400,6 +400,7 @@ Describe 'Backport PR titles' -Tag 'PR-title' {
                 Should -Throw -ExpectedMessage 'invalid_source_title'
         }
         (& $script:TitleCore { Get-BackportSafeReason 'invalid_source_title' }) | Should -BeExactly 'invalid_source_title'
+        (& $script:TitleCore { Get-BackportSafeReason 'invalid_issue_title' }) | Should -BeExactly 'invalid_issue_title'
     }
 }
 
@@ -439,12 +440,22 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
         $T.Api.source.body = 'Original description must not be copied.'
         $T.Config.event_name | Should -BeExactly 'pull_request_target'
         $T.Config.sender_id | Should -Be 59250993
-        $published = Invoke-BackportTestStages $T -Last publish
+        $null = Invoke-BackportTestStages $T -Last track
+        $T.Api.issues[0].title | Should -BeExactly '[29.x] Fix source handling'
+        $T.Api.source.title = '[master] Source title edited after tracking'
+        $null = Invoke-BackportTestStage $T prepare
+        $T.Api.issues[0].title = ''
+        { Invoke-BackportTestStage $T publish } | Should -Throw -ExpectedMessage 'invalid_issue_title'
+        $T.Pushes.Count | Should -Be 0
+        $T.Api.pulls.Count | Should -Be 0
+        $T.Api.issues[0].title = '[29.x] Fix source handling'
+        $published = Invoke-BackportTestStage $T publish
         $published.status | Should -BeExactly 'pr-created'
         $T.Config.triggering_actor_id | Should -Be 59250993
         $T.Api.issues.Count | Should -Be 1
         $T.Api.pulls.Count | Should -Be 1
         $T.Api.pulls[0].title | Should -BeExactly '[29.x] Fix source handling'
+        $T.Api.issues[0].title | Should -BeExactly $T.Api.pulls[0].title
         $T.Pushes.Count | Should -Be 1
         @($T.Pushes[0] | Where-Object { $_ -clike '--force-with-lease=*' }) |
             Should -Be @('--force-with-lease=refs/heads/backport/29.x/pr-7:')
@@ -468,6 +479,7 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
     }
     It 'reuses manual then label relabel and rerun identities without additional creates' -Tag 'L-002', 'LT-08', 'PR-title' {
         $null = Invoke-BackportTestStages $T -Last publish
+        $issueTitle = $T.Api.issues[0].title
         $T.Api.pulls[0].title = 'Backport #7 to 29.x'
         $T.Api.source.title = '[master] Updated source summary'
         $head = Invoke-StageFixtureGit $T @('rev-parse', 'backport/29.x/pr-7')
@@ -477,6 +489,7 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
             Set-BackportLabelStageConfig $T
             (Invoke-BackportTestStages $T -Last publish).status | Should -BeExactly 'pr-reused'
             $T.Api.issues[0].number | Should -Be 101
+            $T.Api.issues[0].title | Should -BeExactly $issueTitle
             $T.Api.pulls[0].number | Should -Be 102
             $T.Api.pulls[0].title | Should -BeExactly 'Backport #7 to 29.x'
             @($T.Api.calls | Where-Object method -CEQ POST).Count | Should -Be $creates
@@ -1721,7 +1734,7 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
     }
     It 'test_feedback_contains_reason_and_never_copies_source_text' {
         Set-StageConflict $T
-        $T.Api.source.title = "AB#999`nmalicious title"
+        $T.Api.source.title = 'AB#999 malicious title'
         $T.Api.source.body = 'arbitrary body'
         $null = Invoke-BackportTestStages $T -Last publish
         $T.Api.comments.Count | Should -Be 2
