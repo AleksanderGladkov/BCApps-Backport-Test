@@ -152,10 +152,10 @@ cancellation to stop subsequent work, subject to the race limitations below.
 
 ## Requesters, repository scope and live policy
 
-Only AleksanderGladkov's numeric ID 59250993 is allowed initially. Once Milica
-accepts collaborator access, the owner can separately approve adding her verified
-numeric GitHub ID to **both** `BACKPORT_ALLOWED_ACTOR_IDS` (a comma-separated Actions
-variable) and `allowed_actor_ids` in the reviewed
+The initial requester allowlist contains numeric GitHub user ID `59250993`.
+Adding a requester requires approval to add their verified numeric GitHub ID to
+**both** `BACKPORT_ALLOWED_ACTOR_IDS` (a comma-separated Actions variable) and
+`allowed_actor_ids` in the reviewed
 [request-policy.json](request-policy.json) on main. The variable defaults to
 `59250993`; it is a start-time snapshot, not a live revocation control.
 The original requester and independently verified current rerunner must be in both
@@ -321,20 +321,12 @@ If any write may have occurred, retain journals/artifacts/history and reconcile
 exact objects before retrying. Rollback does not authorize closing Issues,
 merging PRs, deleting branches/comments/history, or retrying an uncertain create.
 
-## Milica's next integration step
+## Conflict handling
 
-The controller does not run Copilot yet. On conflict, prepare writes a JSON
-handoff containing repo, source_pr, source_sha, target_base_sha, worktree, and
-files (each with relative_path and absolute_path).
+The preparation result retains conflict details, including repository, source and
+target SHAs, and affected files. Its worktree paths belong to that job's runner
+and must not be reused after the runner is removed.
 
-The worktree belongs to the prepare job and disappears with its runner. A
-separate resolver job must recreate the conflict from the recorded SHAs and
-set its own worktree path. It must not use a previous runner's absolute path.
-Add repository read and copilot-requests write only to that new job, with no
-publishing token. Keep its result schema and publisher verification as a
-reviewed follow-up: the current publisher accepts only its own recomputed
-clean cherry-pick, not an AI patch marked resolved.
-
-Return resolved/needs-attention, the reason, changed file list, source/base
-SHAs, and patch/checksum. Alexander must add independent path/region/fix checks
-before accepting that new result; changing the status string is insufficient.
+The workflow reports `needs-attention` without publishing a branch or PR. It has
+no automatic conflict-resolution step; the publisher accepts only its independently
+recomputed clean cherry-pick result.

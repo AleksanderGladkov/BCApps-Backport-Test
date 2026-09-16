@@ -2156,6 +2156,7 @@ Describe 'Label workflow admission contract' -Tag 'L-001', 'LT-05' {
         $production | Should -Match '(?m)^      - name: Validate requester, source history and target\n        id: validate$'
         $production | Should -Match '(?m)^  track:\n    needs: validate\n    if: needs.validate.outputs.plan_ready == ''true''$'
         $production | Should -Match '(?m)^  prepare:\n    needs: track$'
+        $production | Should -Match '(?m)^      - name: Save preparation result$'
         $production | Should -Match '(?m)^  publish:\n    needs: prepare$'
         [regex]::Matches($production, 'ref: \$\{\{ github.workflow_sha \}\}\n          persist-credentials: false\n          sparse-checkout: .github/scripts/backport-demo').Count | Should -Be 4
         $production | Should -Match '(?m)^permissions: \{\}$'
