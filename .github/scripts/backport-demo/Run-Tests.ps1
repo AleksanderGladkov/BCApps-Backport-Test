@@ -83,12 +83,22 @@ function Get-BackportLabelWorkflowEdits {
             Before = "  track:`n    needs: validate`n"
             After = "  track:`n    needs: validate`n    if: needs.validate.outputs.plan_ready == 'true'`n"; Count = 1
         }
+        @{
+            Before = "      - name: Save clean result or Milica's conflict handoff"
+            After = '      - name: Save preparation result'; Count = 1
+        }
+        @{
+            Before = "  # Milica's resolver is deliberately not invoked yet. A conflict is reported`n" +
+                "  # as needs-attention and cannot be published. Add a separate read-only/model`n" +
+                "  # job and independent resolution verification before accepting AI patches.`n  publish:`n"
+            After = "  publish:`n"; Count = 1
+        }
     )
 }
 
 function ConvertFrom-BackportLabelWorkflow {
     param([string]$Text)
-    # Reverse only the explicitly asserted feature delta, then require the complete historical hash and blocks.
+    # Reverse only the asserted feature and presentation edits before checking historical hashes and blocks.
     foreach ($edit in Get-BackportLabelWorkflowEdits) {
         if ([regex]::Matches($Text, [regex]::Escape($edit.After)).Count -ne $edit.Count) { throw 'workflow_baseline_mismatch' }
         $Text = $Text.Replace($edit.After, $edit.Before)
