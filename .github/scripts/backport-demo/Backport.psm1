@@ -1848,6 +1848,15 @@ function Get-BackportIssueBody {
         (Get-BackportMarker $Config $Plan)
 }
 
+function Get-BackportPrTitle {
+    param($Source)
+    $title = Get-BackportField $Source 'title'
+    if ($title -isnot [string] -or $title -match '[\x00-\x1f\x7f]') { throw 'invalid_source_title' }
+    $title = [regex]::Replace($title, '\[(?:main|master)\] ?', '', [Text.RegularExpressions.RegexOptions]::IgnoreCase).Trim()
+    if ([string]::IsNullOrWhiteSpace($title)) { throw 'invalid_source_title' }
+    return "[29.x] $title"
+}
+
 function Get-BackportPrBody {
     param($Config, $Plan, $Issue, [string]$Tree)
     "Backport of #$($Config.source_pr)`nFixes #$Issue`n`n" + (Get-BackportMarker $Config $Plan) +
@@ -2323,6 +2332,7 @@ function Invoke-BackportPublish {
         if (-not (Test-BackportLiteral $current.target @($plan['target_base_sha']))) {
             return ,(Complete-BackportStage -Config $Config -Plan $plan -Tracking $tracking -Status 'needs-attention' -Reason 'target_advanced')
         }
+        $prTitle = Get-BackportPrTitle $current.source
         $journal = Get-BackportPublicationJournal $Config $plan
         if (Test-BackportLiteral 'pr' $journal['attempted']) { throw 'pr_create_ambiguous' }
         if ($null -eq $head) {
@@ -2342,7 +2352,7 @@ function Invoke-BackportPublish {
         }
         $value = Invoke-BackportWriteOnce -Config $Config -Plan $plan -Key 'pr' -Method POST `
             -Path '/repos/AleksanderGladkov/BCApps-Backport-Test/pulls' -Data @{
-                title = "Backport #$($Config.source_pr) to 29.x"; head = Get-BackportBranch $Config
+                title = $prTitle; head = Get-BackportBranch $Config
                 base = 'releases/29.x'; body = Get-BackportPrBody $Config $plan $tracking['issue_number'] $result['tree_sha']; draft = $false
             }
         $null = Get-BackportObjectUrl $value 'pull'
@@ -2369,7 +2379,7 @@ function Get-BackportSafeReason {
         'push_failed_or_ambiguous','dry_run_write_blocked','invalid_api_method','invalid_api_path',
         'api_read_failed','api_write_ambiguous','api_redirect_rejected','api_response_too_large',
         'invalid_sha','git_ancestry_failed','source_head_changed','source_not_on_main','target_history_changed',
-        'source_not_squash','ambiguous_merge_base','changed_files_mismatch','unexpected_conflict_paths',
+        'source_not_squash','invalid_source_title','ambiguous_merge_base','changed_files_mismatch','unexpected_conflict_paths',
         'unproven_empty_or_failed_cherry_pick','unexpected_result_paths','wrong_commit_parent',
         'ambiguous_branch','invalid_branch_response','branch_changed','existing_branch_parent_mismatch',
         'existing_branch_tree_mismatch','existing_branch_provenance_mismatch','unsafe_output','unsafe_summary',
