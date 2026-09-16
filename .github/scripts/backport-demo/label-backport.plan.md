@@ -2,7 +2,7 @@
 title: Label-triggered fork backports - execution plan
 date_created: 2026-09-16
 last_updated: 2026-09-16
-status: L-001 DONE - L-002 and L-003 pending
+status: L-001 DONE - L-002 DONE (reviewed and committed) - L-003 pending
 revision_notes: Approved self-contained execution copy. Retains the three local label epics, main-backed live policy and per-write checks. Internal workspace references are omitted; hosted actions remain separately approval-gated.
 ---
 
@@ -18,7 +18,9 @@ This is an additional entry point, not a new backport service. Reuse the existin
 
 This execution copy is the status source for local implementation. It preserves the three scoped epics and supersedes broader historical requirements for this feature. Earlier resolver-integration, label-generation/event-correlation and hosted-demo requirements remain deferred, not completed. The external planning original is not an implementation input or staging target and must be reconciled separately.
 
-The owner approved creating this public-safe copy in a separate local preparation commit and explicitly invoked implementation. Begin with **L-001 only**; L-002 and L-003 can follow as scoped runs after their prerequisites. Normal local implementation, tests, epic commits and status updates to this copy are authorized. Pushes, deployments, hosted workflow dispatches, label applications, merges and other hosted mutations still require separate explicit approval. Do not modify skills, agents, profiles or runner templates.
+The owner approved creating this public-safe copy in a separate local preparation commit and explicitly invoked implementation. L-001 completed in commit `40223ba771c7f50f6ef434226bb198058a96b52c`. The subsequent implementation invocation authorizes **all remaining epics: L-002, then L-003**, in one workflow without an epic filter, followed by holistic review and necessary fixes. This supersedes the earlier L-001-only launch restriction. Normal local implementation, tests, epic commits and status updates to this copy are authorized. Pushes, deployments, hosted workflow dispatches, label applications, merges and other hosted mutations still require separate explicit approval. The owner additionally approved a run-specific workflow copy outside the repository with targeted epic checks and a separate final acceptance script. Do not modify the installed skills, profiles or workflow assets, and do not commit the external orchestration files.
+
+**Owner testing constraint for every remaining epic and review:** "Do not create and run a lot of tests - only necessary." Reuse existing tests and fixtures, add only cases needed for the stated acceptance criteria, and avoid redundant parameterized cases or test-count targets. L-002 coding and review use targeted tests only: the existing `Run-Tests.ps1 -Epic L-002` selection plus affected existing regressions, including `retains authoritative current-user IDs for label reruns`. No agent may run or delegate an unfiltered suite. Do not overlap test processes. Full acceptance belongs exclusively to the independent script step after L-003 implementation stabilizes; it runs outside the coder session with its own two-hour timeout. It retains XML/logs and reuses a successful result only when test-relevant file fingerprints and evidence hashes still match. Documentation-only changes do not require another full run. A failed full run returns to narrow reproduction and fixes, then the script reruns. Do not treat targeted results or L-001's historical pass as final acceptance.
 
 ### Implementation workspace and accepted baseline
 
@@ -199,7 +201,7 @@ The current test runner freezes historical workflow hashes/blocks. Update its ex
 
 ## Implementation plan
 
-All tasks and acceptance criteria below are **TO DO** at preparation. No label or policy implementation/test completion is claimed. L-001 remains entry/workflow work; L-002 includes history/stage integration and the live policy; L-003 completes local coverage/docs. Update task statuses and acceptance criteria in this file as work is actually completed.
+L-001 is DONE as recorded below. L-002 implementation and its targeted gate are complete, with review/commit pending; L-003 remains TO DO. The current implementation task is scoped to L-002 only. L-002 includes history/stage integration and the live policy; L-003 completes local coverage/docs. Update task statuses and acceptance criteria in this file as work is actually completed.
 
 ### L-001: Add the label entry and normalized request
 
@@ -209,7 +211,7 @@ All tasks and acceptance criteria below are **TO DO** at preparation. No label o
 
 **Requirements:** R1-R3, R6. **Prerequisites:** Accepted PowerShell baseline and the execution preparation below; no independent integration or hosted evidence.
 
-**Restart guidance (2026-09-16):** Continue the existing uncommitted L-001 implementation rather than recreating it. The previous coder session reached its 3600-second limit while waiting for the full test runner; it did not complete review or an epic commit. Its six modified files are expected in-scope work, not an unrelated dirty baseline. The preparation commit and local ignore setup are already complete.
+**Historical restart guidance (resolved):** The first coder session reached its 3600-second limit while waiting for the full test runner. The restarted workflow continued its six in-scope modified files and completed L-001, including review and commit. Do not recreate this completed epic.
 
 **Owner testing constraint:** "Do not create and run a lot of tests - only necessary." Reuse existing tests and fixtures, add only necessary coverage for this epic's acceptance criteria, and avoid redundant parameterized cases or test-count targets. Start with one focused selection covering the changed behavior; do not overlap test processes or repeatedly run the full suite during development. Investigate the previous runner stall before another full run. Broaden coverage only when affected behavior or the existing acceptance gate requires it, and reuse valid results for unchanged code during review. Preserve the historical parity gates; focused results must not be reported as full acceptance.
 
@@ -236,27 +238,37 @@ This epic establishes event/actor admission, not completed label publication. Th
 
 ### L-002: Connect labels to existing stages, history and live policy
 
+**Status:** DONE (reviewed and committed)
+
 **Goal:** Make the existing executor process label requests with live-policy controls, preserving duplicate prevention and the single backport path.
 
 **Requirements:** R2-R6, R8. **Prerequisites:** L-001.
 
+**Restart and execution guidance:** Preserve and finish the existing uncommitted history, policy, test and fixture changes, including the new `request-policy.json`; do not recreate the implementation. The preceding L-002 coder timed out while waiting for an unfiltered run, without reaching review or commit. Run only `Run-Tests.ps1 -Epic L-002` and necessary affected regressions. Include and fix the existing `retains authoritative current-user IDs for label reruns` case in targeted coverage; do not weaken its authorization checks or enable the checked-in label policy. Coding, subagents and reviewers must not run the unfiltered suite or require it to approve this epic. Passing the targeted acceptance scenarios is sufficient for the L-002 gate; final full regression remains required by the independent L-003 step. Continue automatically to L-003 after this epic is approved and committed.
+
 | Task ID | Type | Description | Files | Status |
 |---|---|---|---|---|
-| L2-1 | IMPL | Extend current run identity/history parsing for label metadata. Preserve manual history, attempt-1 creation limits and incomplete/possible-writer stops. Add bounded attempt-job proof only for completed rejected label runs. | `Backport.psm1` | TO DO |
-| L2-2 | IMPL | Verify and, where necessary, wire normalized configuration through all four current stages using existing artifact bindings. Preserve object/journal identity, independent verification and existing feedback/conflict behavior. | `Backport.psm1`, `backport-demo.yml` only if stage wiring requires it | TO DO |
-| L2-3 | TEST | Add LT-06 through LT-09 using existing fake API and owned Git fixtures: rejected-label history, first creation, mixed-entry reuse, ambiguous recovery and conflict stop. Extend explicit feature coverage in the runner as needed. | `Backport.Tests.ps1`, `TestHelpers.ps1`, `Run-Tests.ps1` | TO DO |
-| L2-4 | IMPL | Add the strict trusted/main-backed policy and initial disabled-label configuration. Intersect actor authorization, enforce switches and policy-byte binding at admission, and place fresh checks before every Issue/push/PR/comment mutation and after read-back, including reuse and feedback recovery. | `request-policy.json`, `Backport.psm1`; `backport-demo.yml` only if needed for trusted policy checkout | TO DO |
-| L2-5 | TEST | Add LT-11 through LT-13: policy schema/allowlist/switches, old-request policy changes, unreadable policy and withdrawal at every write/feedback boundary, including an in-flight race. Assert preserved partial objects and Actions-only stops using deterministic callbacks. | `Backport.Tests.ps1`, `TestHelpers.ps1`, `Run-Tests.ps1` | TO DO |
+| L2-1 | IMPL | Extend current run identity/history parsing for label metadata. Preserve manual history, attempt-1 creation limits and incomplete/possible-writer stops. Add bounded attempt-job proof only for completed rejected label runs. | `Backport.psm1` | DONE |
+| L2-2 | IMPL | Verify and, where necessary, wire normalized configuration through all four current stages using existing artifact bindings. Preserve object/journal identity, independent verification and existing feedback/conflict behavior. | `Backport.psm1`, `backport-demo.yml` only if stage wiring requires it | DONE |
+| L2-3 | TEST | Add LT-06 through LT-09 using existing fake API and owned Git fixtures: rejected-label history, first creation, mixed-entry reuse, ambiguous recovery and conflict stop. Extend explicit feature coverage in the runner as needed. | `Backport.Tests.ps1`, `TestHelpers.ps1`, `Run-Tests.ps1` | DONE |
+| L2-4 | IMPL | Add the strict trusted/main-backed policy and initial disabled-label configuration. Intersect actor authorization, enforce switches and policy-byte binding at admission, and place fresh checks before every Issue/push/PR/comment mutation and after read-back, including reuse and feedback recovery. | `request-policy.json`, `Backport.psm1`; `backport-demo.yml` only if needed for trusted policy checkout | DONE |
+| L2-5 | TEST | Add LT-11 through LT-13: policy schema/allowlist/switches, old-request policy changes, unreadable policy and withdrawal at every write/feedback boundary, including an in-flight race. Assert preserved partial objects and Actions-only stops using deterministic callbacks. | `Backport.Tests.ps1`, `TestHelpers.ps1`, `Run-Tests.ps1` | DONE |
 
 **Acceptance Criteria**
 
-- [ ] A clean authorized label event with a synthetic enabled policy traverses the real local stages, creates exactly the expected Issue/branch/PR/comments in fixtures, and verifies the resulting content.
-- [ ] Manual/label repeats reuse verified identities; neither relabeling nor a rerun bypasses ambiguous or missing-create guards.
-- [ ] Positively proven rejected non-writers do not poison later creation; possible writers, incomplete evidence and earlier writing attempts still block missing creates.
-- [ ] Existing artifact/patch-tampering checks remain effective and a conflict cannot publish a branch or PR.
-- [ ] Disabled switches, revoked actors, invalid/unreadable policy and detected policy changes prevent further writes at every boundary, including feedback; prior objects and journal entries remain intact.
-- [ ] An authorized manual dry-run remains available under a valid write-disabled policy; labels are rejected, never silently converted to dry runs. The initial checked-in policy leaves labels disabled.
-- [ ] Policy checks work without label-generation tracking, a profile registry, sidecar/schema changes or additional credentials.
+- [x] A clean authorized label event with a synthetic enabled policy traverses the real local stages, creates exactly the expected Issue/branch/PR/comments in fixtures, and verifies the resulting content.
+- [x] Manual/label repeats reuse verified identities; neither relabeling nor a rerun bypasses ambiguous or missing-create guards.
+- [x] Positively proven rejected non-writers do not poison later creation; possible writers, incomplete evidence and earlier writing attempts still block missing creates.
+- [x] Existing artifact/patch-tampering checks remain effective and a conflict cannot publish a branch or PR.
+- [x] Disabled switches, revoked actors, invalid/unreadable policy and detected policy changes prevent further writes at every boundary, including feedback; prior objects and journal entries remain intact.
+- [x] An authorized manual dry-run remains available under a valid write-disabled policy; labels are rejected, never silently converted to dry runs. The initial checked-in policy leaves labels disabled.
+- [x] Policy checks work without label-generation tracking, a profile registry, sidecar/schema changes or additional credentials.
+
+**Local completion (2026-09-16):** Preserved the inherited executor, history, live-policy, runner and fixture changes. Reused the existing LT-06 through LT-09 and LT-11 through LT-13 cases without adding test functions. Included all five `retains authoritative current-user IDs for label reruns` cases in the L-002 selection. The first targeted run reproduced one failure: numeric rerunner 12 was in the test's workflow allowlist but absent from its synthetic policy. Aligned only that test's trusted/live policy allowlist and asserted that the authoritative current-user ID is retained. The unauthorized and invalid-type rejection assertions remain unchanged. Extended the existing switch case to assert the checked-in owner allowlist, disabled labels and enabled manual writes; production policy and authorization were not relaxed.
+
+**Targeted evidence:** Two sequential, non-overlapping `Run-Tests.ps1 -Epic L-002` runs used PowerShell 7.6.6, .NET 10.0.12 and Pester 5.7.1. The reproduction passed 45/46 cases in 548.03 seconds; the corrected selection passed 46/46 in 541.66 seconds, including all five authoritative rerunner cases, with zero failures or skips. XML and logs are retained outside the repository under `C:\Users\algladkov\.copilot\session-state\c36ee05c-8762-47c7-8026-3451edfa84f2\files` as `l002-before.xml`, `l002-before.log`, `l002-targeted.xml` and `l002-targeted.log`.
+
+**Limitations and handoff:** These results satisfy the owner-approved local L-002 targeted gate only. The selection left 463 other discovered cases unexecuted; no unfiltered suite, hosted mutation, deployment or AL product validation ran in this session. Full acceptance remains pending the independent script after L-003. L3-1/L3-3 and all other L-003 work remain unchanged and pending. This coder session stops at L-002 for review and commit.
 
 ### L-003: Complete local regression coverage and operator documentation
 
@@ -264,9 +276,11 @@ This epic establishes event/actor admission, not completed label publication. Th
 
 **Requirements:** R1-R8. **Prerequisites:** L-001 and L-002.
 
+**Execution guidance:** Finalize documentation, the actual-workflow LT-10 contract and the runner's final required coverage first, using only targeted checks. Then return from the coder session with full-run-dependent criteria still pending. The external workflow's `full_tests` script executes the existing unfiltered `Run-Tests.ps1` after the coder session ends and before epic review/commit. On failure, inspect its retained log/XML and fix only the necessary regressions using focused selections; return so the independent script can rerun. After a successful script result, the reviewer verifies the evidence and the committer records actual results and completes L3-1/L3-3. Never claim completion merely because the test process started. The final review consumes the same content-bound result; code/test changes invalidate it, documentation-only changes do not.
+
 | Task ID | Type | Description | Files | Status |
 |---|---|---|---|---|
-| L3-1 | TEST | Run the full existing Pester entry including new label and live-policy cases, require them to execute, and resolve feature-caused regressions. Preserve manual/read-only test-workflow behavior; change its invocation only if needed to include the cases. | `Backport.Tests.ps1`, `TestHelpers.ps1`, `Run-Tests.ps1`; `backport-demo-tests.yml` only if necessary | TO DO |
+| L3-1 | TEST | Prepare the full existing Pester entry including new label and live-policy cases for the independent acceptance script. Require them to execute, and resolve feature-caused failures using targeted checks before the script reruns. Record completion only after its full gate passes. Preserve manual/read-only test-workflow behavior; change its invocation only if needed to include the cases. | `Backport.Tests.ps1`, `TestHelpers.ps1`, `Run-Tests.ps1`; `backport-demo-tests.yml` only if necessary | TO DO |
 | L3-2 | IMPL | Document authorized post-merge label usage, manual dry-run, policy allowlist/switch controls and initial values, policy-change/fresh-request behavior, existing recovery and conflict stop. Explain removal-not-cancellation, policy check/write races and older-run limitations; state local/deployed status honestly. | `README.md` | TO DO |
 | L3-3 | TEST | Cover the final actual-workflow contract and acceptance entry in LT-10; record the new case results and retained regression result without claiming GitHub or AL product validation. | `Backport.Tests.ps1`, `Run-Tests.ps1`, `README.md` | TO DO |
 
@@ -320,15 +334,15 @@ Paths below are relative to the target repository root; filenames in the task ta
 
 The single live policy is the only new production configuration file; no new state/profile/sidecar files, AL fixtures or deleted files are planned. Reuse existing test files for label/policy fixtures. `compat.json`, `parity.json`, the separate auth-smoke workflow, historical migration documents, external plans, internal skills and Octane assets are not implementation targets.
 
-## Execution preparation for unchanged Octane
+## Execution preparation for the approved run-specific workflow
 
 1. Use the selected fork root and feature branch. The accepted baseline was confirmed before preparation. Do not switch branches; the local feature branch does not change the production requirement for trusted main workflow code.
-2. Preserve pre-existing work. The Python baseline exporter is saved in an existing stash and is not part of this feature; do not apply or drop that stash. By owner approval, move the unrelated `/.github/skills/` ignore addition into this repository's local `.git\info\exclude` and restore the tracked `.gitignore` to its initial state. Do not stage local excludes or unrelated files. Confirm a clean tracked/untracked worktree and empty index after the preparation commit and before launch.
-3. Establish this execution copy in a separate local preparation commit. Keep its links self-contained and use this file as the status source. Do not copy internal documents, introduce an outside-repository symlink, stage another repository or automatically synchronize the external original.
-4. Run the packaged `conductor-sdd-runtime` prerequisite step once per session. Start a fresh **L-001-only** run rather than resuming a stopped checkpoint. L-002 and L-003 can follow as scoped runs after their preceding epics.
-5. Use the existing unmodified installed `octane-workflow-implement\assets\implement.yaml`. Run Conductor in a foreground terminal from this repository root with `--quiet run --workspace-instructions`, the absolute workflow and execution-plan paths, `--input epic="L-001"` and `--web-bg`. Share the returned dashboard URL and stop watching. Do not replace the runtime, edit templates or implement a custom blocked-result exit.
+2. Preserve pre-existing work. The Python baseline exporter is saved in an existing stash and is not part of this feature; do not apply or drop that stash. The unrelated `/.github/skills/` ignore addition has already been moved into this repository's local `.git\info\exclude` and the tracked `.gitignore` restored by owner approval. Do not stage local excludes or unrelated files. The five modified tracked files and new `request-policy.json` from the interrupted L-002 run, including this plan's guidance updates, are expected in-scope work. Preserve them; keep abandoned test fixtures outside the repository.
+3. This execution copy was established in preparation commit `1372c3742`. Keep its links self-contained and use this file as the status source. Do not copy internal documents, introduce an outside-repository symlink, stage another repository or automatically synchronize the external original. Include normal scope/status updates to this copy in the next epic commit.
+4. Run the packaged `conductor-sdd-runtime` prerequisite step once per session. Start a fresh run against this plan without an epic filter, rather than resuming a failed checkpoint. Skip completed L-001, execute L-002 and L-003 in order, then complete holistic review.
+5. Use the owner-approved external `implement-targeted.yaml` copy and `Invoke-FinalBackportTests.ps1`, leaving the installed workflow unchanged. The copy preserves epic selection, review, commits and holistic fixes; it replaces per-coder full runs with targeted checks and independent `full_tests`/`final_tests` script gates. Run Conductor in a foreground terminal from this repository root with `--quiet run --workspace-instructions`, the absolute workflow and execution-plan paths and `--web-bg`. Omit the optional `epic` input. Share the returned dashboard URL and stop watching.
 
-For the owner-requested restart after the first run's timeout, preserve the existing six in-scope modified files and continue L-001 from them. The initial clean-worktree preparation requirement was satisfied before that run; do not discard or prematurely commit its unfinished implementation to make the restart clean. Keep abandoned test fixtures outside the repository and out of epic commits. Apply the L-001 testing constraint above throughout coding, review and fixes.
+The earlier L-001 timeout recovery is complete. The current run continues interrupted L-002 work, not a failed provider session. Preserve committed and in-progress work. Keep test and orchestration artifacts outside the repository and out of epic commits. Apply the owner testing constraint throughout coding, review and fixes for both remaining epics.
 
 The stock `epic_diff` captures `git status --porcelain`, not a before/after baseline. Its reviewer may treat pre-existing dirty files as epic work, and its committer says to stage all modified files including the plan. Its coder has no dedicated blocked-result exit. Prepared scope and clean working-tree state reduce these risks; this plan does not claim that the unchanged runner automatically excludes unrelated changes or guarantees termination of blocked review loops. Stop for owner guidance if unrelated work appears.
 
@@ -339,7 +353,7 @@ Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
 Copilot-Session: 6159a05f-2cf0-45d4-86b2-05355fe954c6
 ```
 
-No push is authorized by a local commit. For an epic-scoped run, restrict implementation, review and fixes to the selected epic and necessary compatibility; do not implement the remaining epics prematurely.
+No push is authorized by a local commit. Implement one epic at a time, respecting prerequisites, but do not stop the current workflow after L-002: both remaining epics and final holistic review are authorized.
 
 ## Completion and optional hosted follow-up
 

@@ -4,7 +4,7 @@
 # Setup: Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Repository PSGallery
 [CmdletBinding()]
 param(
-    [ValidateSet('EPIC-001', 'EPIC-002', 'EPIC-003', 'L-001')][string]$Epic,
+    [ValidateSet('EPIC-001', 'EPIC-002', 'EPIC-003', 'L-001', 'L-002')][string]$Epic,
     [string]$ResultPath,
     [string]$ParityPath
 )
@@ -183,7 +183,7 @@ function Test-BackportAcceptance {
     param(
         [AllowNull()]$Result,
         [AllowNull()]$Parity,
-        [ValidateSet('EPIC-001', 'EPIC-002', 'EPIC-003', 'L-001')][string]$Epic
+        [ValidateSet('EPIC-001', 'EPIC-002', 'EPIC-003', 'L-001', 'L-002')][string]$Epic
     )
     $errors = [Collections.Generic.List[string]]::new()
     $tests = @($Result.Tests | Where-Object { $null -ne $_ })
@@ -284,7 +284,7 @@ function Test-BackportAcceptance {
                 $migrationPassed++
             }
         }
-        foreach ($id in @(1..5 | ForEach-Object { 'LT-{0:d2}' -f $_ })) {
+        foreach ($id in @((1..9 + 11..13) | ForEach-Object { 'LT-{0:d2}' -f $_ })) {
             $matches = @($tests | Where-Object { (Get-BackportTestTags $_).Contains($id) })
             if ($matches.Count -eq 0) { $errors.Add("missing label case: $id") }
             elseif (@($matches | Where-Object { $_.Result -cne 'Passed' -or $_.Executed -ne $true }).Count -eq 0) {
@@ -299,7 +299,7 @@ function Test-BackportAcceptance {
         "Development $Epic - NOT full acceptance."
     }
     else {
-        "Full acceptance: $baselinePassed/67 distinct baseline cases; $migrationPassed/12 migration IDs; $labelPassed/5 label IDs."
+        "Full acceptance: $baselinePassed/67 distinct baseline cases; $migrationPassed/12 migration IDs; $labelPassed/12 label IDs."
     }
     [pscustomobject]@{
         Accepted = $errors.Count -eq 0
@@ -316,7 +316,7 @@ function Test-BackportAcceptance {
 function Invoke-BackportTests {
     [CmdletBinding()]
     param(
-        [ValidateSet('EPIC-001', 'EPIC-002', 'EPIC-003', 'L-001')][string]$Epic,
+        [ValidateSet('EPIC-001', 'EPIC-002', 'EPIC-003', 'L-001', 'L-002')][string]$Epic,
         [string]$ResultPath,
         [string]$ParityPath = (Join-Path $PSScriptRoot 'parity.json')
     )

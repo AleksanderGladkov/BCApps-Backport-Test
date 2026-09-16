@@ -26,7 +26,7 @@ BeforeAll {
         }) + @($parity.required_migration_ids | ForEach-Object {
             [pscustomobject]@{ Name = "synthetic migration $_"; Tag = @($_); Result = 'Passed'; Executed = $true }
         })
-        $tests = $tests[0..66] + @(1..5 | ForEach-Object {
+        $tests = $tests[0..66] + @((1..9 + 11..13) | ForEach-Object {
             [pscustomobject]@{ Name = "synthetic label $_"; Tag = @('LT-{0:d2}' -f $_); Result = 'Passed'; Executed = $true }
         }) + $tests[67..($tests.Count - 1)]
         [pscustomobject]@{
@@ -46,6 +46,338 @@ BeforeAll {
     }
 }
 
+Describe 'Label history and immutable live policy helpers' -Tag 'L-002' {
+    BeforeAll {
+        Import-Module (Join-Path $PSScriptRoot 'Backport.psm1') -Force
+        $script:PolicyCore = Get-Module Backport
+    }
+    BeforeEach {
+        $script:PolicyTest = [pscustomobject]@{
+            Api = (New-FakeGitHub)
+            TrustedPolicyBytes = (New-BackportTestPolicyBytes)
+            Config = @{
+                event_name = 'workflow_dispatch'; source_pr = 7; dry_run = $false
+                actor_id = 59250993; triggering_actor_id = 59250993; sender_id = $null
+                allowed_actor_ids = @(59250993); run_id = '123'; run_attempt = '1'
+            }
+            HttpFilter = $null
+        }
+        $PolicyTest.TrustedPolicyBytes = $PolicyTest.Api.policy_bytes.Clone()
+        $PolicyTest.Api.runs.Add((New-FakeWorkflowRun -Api $PolicyTest.Api))
+        $script:StageTest = $PolicyTest
+        & $script:PolicyCore { param($t) $script:StageTest = $t } $PolicyTest
+        Mock -ModuleName Backport New-BackportHttpClient { throw 'network_forbidden' }
+        Mock -ModuleName Backport Invoke-BackportHttp {
+            param($Config, $Method, $Path, $Data)
+            $t = $script:StageTest
+            if ($t.HttpFilter) { return ,(& $t.HttpFilter $t $Method $Path $Data) }
+            return ,(Invoke-FakeGitHub $t.Api $Method $Path $Data)
+        }
+        if (& $script:PolicyCore { [bool](Get-Command Read-BackportTrustedPolicyBytes -ErrorAction SilentlyContinue) }) {
+            Mock -ModuleName Backport Read-BackportTrustedPolicyBytes { return ,$script:StageTest.TrustedPolicyBytes }
+        }
+    }
+    It 'recognizes manual and label run identities without assuming head SHA is the workflow SHA' -Tag 'LT-06' {
+        foreach ($event in @('workflow_dispatch', 'pull_request_target')) {
+            $run = New-FakeWorkflowRun -Api $PolicyTest.Api -Event $event
+            $run.head_sha = 'd' * 40
+            $run.pull_requests = @()
+            $identity = & $PolicyCore { param($r) Get-BackportRunIdentity $r } $run
+            $identity.source_pr | Should -Be 7
+            $identity.dry_run | Should -BeFalse
+        }
+        $run.head_branch = 'source-fix'
+        $associationRepo = @{
+            id = 1369849596; name = 'BCApps-Backport-Test'
+            url = 'https://api.github.com/repos/AleksanderGladkov/BCApps-Backport-Test'
+        }
+        $run.pull_requests = @(@{
+            number = 7
+            base = @{ ref = 'main'; repo = (Copy-BackportTestValue $associationRepo) }
+            head = @{ ref = 'source-fix'; sha = $run.head_sha; repo = (Copy-BackportTestValue $associationRepo) }
+        })
+        (& $PolicyCore { param($r) Get-BackportRunIdentity $r } $run).source_pr | Should -Be 7
+        $run.head_branch = 'main'
+        (& $PolicyCore { param($r) Get-BackportRunIdentity $r } $run).source_pr | Should -Be 7
+        $run.head_branch = 'source-fix'
+        foreach ($edit in @(
+            { param($r) $r.display_title = 'Backport PR 7 to 29.x (dry run = true)' }
+            { param($r) $r.pull_requests[0].number = 8 }
+            { param($r) $r.pull_requests[0].base.ref = 'releases/29.x' }
+            { param($r) $r.pull_requests[0].base.repo.id = 1 }
+            { param($r) $r.pull_requests[0].head.ref = 'contradictory-branch' }
+            { param($r) $r.pull_requests += $r.pull_requests[0] }
+            { param($r) $r.pull_requests = $null }
+            { param($r) $r.pull_requests = @{} }
+            { param($r) $r.head_branch = '' }
+            { param($r) $r.head_sha = 'not-a-sha' }
+            { param($r) $r.head_repository.id = '12' }
+            { param($r) $r.head_repository.full_name = '' }
+        )) {
+            $bad = Copy-BackportTestValue $run
+            & $edit $bad
+            { & $PolicyCore { param($r) Get-BackportRunIdentity $r } $bad } | Should -Throw
+        }
+        $run.head_repository = @{ id = 12; full_name = 'contributor/source-fork' }
+        $run.pull_requests[0].head.repo = @{
+            id = 12; name = 'source-fork'; url = 'https://api.github.com/repos/contributor/source-fork'
+        }
+        (& $PolicyCore { param($r) Get-BackportRunIdentity $r } $run).source_pr | Should -Be 7
+        $run.pull_requests = @()
+        $run.head_branch = 'fork-source-fix'
+        (& $PolicyCore { param($r) Get-BackportRunIdentity $r } $run).source_pr | Should -Be 7
+    }
+    It 'proves every completed rejected-label attempt before allowing a missing create' -Tag 'LT-06' {
+        $null = Add-BackportRejectedLabelRun $PolicyTest.Api -Attempts 2
+        $PolicyTest.Api.runs.Add((New-FakeWorkflowRun -Api $PolicyTest.Api -Id 121 -Event pull_request_target -SourcePr 8))
+        $PolicyTest.Api.runs.Add((New-FakeWorkflowRun -Api $PolicyTest.Api -Id 120 -DryRun $true))
+        & $PolicyCore { param($c) Assert-BackportFreshCreation $c } $PolicyTest.Config
+        foreach ($attempt in 1..2) {
+            @($PolicyTest.Api.calls | Where-Object path -CEQ "/repos/AleksanderGladkov/BCApps-Backport-Test/actions/runs/122/attempts/$attempt").Count | Should -Be 1
+            @($PolicyTest.Api.calls | Where-Object path -CEQ "/repos/AleksanderGladkov/BCApps-Backport-Test/actions/runs/122/attempts/$attempt/jobs?per_page=100&page=1").Count | Should -Be 1
+        }
+        $PolicyTest.Api.jobs['122/1'].jobs[0].steps = @(
+            @{ number = 1; name = 'Validate request'; status = 'completed'; conclusion = 'failure' }
+            @{ number = 2; name = 'Upload diagnostics'; status = 'completed'; conclusion = 'success' }
+        )
+        & $PolicyCore { param($c) Assert-BackportFreshCreation $c } $PolicyTest.Config
+        $PolicyTest.Api.jobs['122/1'].jobs[0].conclusion = 'cancelled'
+        $PolicyTest.Api.jobs['122/2'].jobs[0].conclusion = 'skipped'
+        & $PolicyCore { param($c) Assert-BackportFreshCreation $c } $PolicyTest.Config
+        $PolicyTest.Api.jobs['122/1'].jobs[0].conclusion = 'timed_out'
+        & $PolicyCore { param($c) Assert-BackportFreshCreation $c } $PolicyTest.Config
+        $PolicyTest.Api.jobs['122/1'].jobs[0].conclusion = 'action_required'
+        & $PolicyCore { param($c) Assert-BackportFreshCreation $c } $PolicyTest.Config
+        $PolicyTest.Api.runs[1].conclusion = 'success'
+        foreach ($attempt in 1..2) {
+            $PolicyTest.Api.attempts["122/$attempt"].conclusion = 'success'
+            $PolicyTest.Api.jobs["122/$attempt"].jobs[0].conclusion = 'skipped'
+            $PolicyTest.Api.jobs["122/$attempt"].jobs[0].steps = @()
+        }
+        & $PolicyCore { param($c) Assert-BackportFreshCreation $c } $PolicyTest.Config
+        $PolicyTest.Api.jobs['122/1'].jobs[1].conclusion = 'success'
+        { & $PolicyCore { param($c) Assert-BackportFreshCreation $c } $PolicyTest.Config } | Should -Throw
+        $PolicyTest.Api.jobs['122/1'].jobs[1].conclusion = 'skipped'
+        $PolicyTest.Api.jobs['122/2'].jobs[0].id = $PolicyTest.Api.jobs['122/1'].jobs[0].id
+        { & $PolicyCore { param($c) Assert-BackportFreshCreation $c } $PolicyTest.Config } | Should -Throw
+        @($PolicyTest.Api.calls | Where-Object method -CNE GET).Count | Should -Be 0
+    }
+    It 'rejects malformed incomplete or possible-writer label attempt evidence' -Tag 'LT-06' {
+        $run = Add-BackportRejectedLabelRun $PolicyTest.Api
+        $attempt = Copy-BackportTestValue $PolicyTest.Api.attempts['122/1']
+        $page = Copy-BackportTestValue $PolicyTest.Api.jobs['122/1']
+        foreach ($edit in @(
+            { param($t) $t.Api.jobs['122/1'].jobs = @() }
+            { param($t) $t.Api.jobs['122/1'].total_count = 5 }
+            { param($t) $t.Api.jobs['122/1'].total_count = '4' }
+            { param($t) $t.Api.jobs['122/1'].jobs[3].name = 'unknown-writer' }
+            { param($t) $t.Api.jobs['122/1'].jobs[3].id = $t.Api.jobs['122/1'].jobs[1].id }
+            { param($t) $t.Api.jobs['122/1'].jobs[1].steps = @(@{ conclusion = 'success' }) }
+            { param($t) $t.Api.jobs['122/1'].jobs[0].conclusion = 'success' }
+            { param($t) $t.Api.jobs['122/1'].jobs[2].conclusion = 'success' }
+            { param($t) $t.Api.jobs['122/1'].jobs[1].run_attempt = 2 }
+            { param($t) $t.Api.jobs['122/1'].jobs[1].run_id = 999 }
+            { param($t) $t.Api.jobs['122/1'].jobs[1].head_sha = 'f' * 40 }
+            { param($t) $t.Api.jobs['122/1'].jobs[1].head_branch = 'unrelated-branch' }
+            { param($t) $t.Api.jobs['122/1'].jobs[1].workflow_name = 'unrelated-workflow' }
+            { param($t) $t.Api.jobs['122/1'].jobs[0].steps = $null }
+            { param($t) $t.Api.jobs['122/1'].jobs[0].steps = @(@{ number = 0; name = 'validate'; status = 'completed'; conclusion = 'failure' }) }
+            { param($t) $t.Api.jobs['122/1'].jobs[0].steps = @(@{ number = 1; name = ''; status = 'completed'; conclusion = 'failure' }) }
+            { param($t) $t.Api.jobs['122/1'].jobs[0].steps = @(@{ number = 1; name = 'validate'; status = 'in_progress'; conclusion = $null }) }
+            { param($t) $t.Api.jobs['122/1'].jobs[0].steps = @(@{ number = 1; name = 'validate'; status = 'completed'; conclusion = 'unknown-conclusion' }) }
+            { param($t) $t.Api.jobs['122/1'].jobs[0].steps = @(
+                @{ number = 1; name = 'validate'; status = 'completed'; conclusion = 'failure' }
+                @{ number = 1; name = 'upload'; status = 'completed'; conclusion = 'success' }
+            ) }
+            { param($t) $t.Api.jobs['122/1'].jobs[0].steps = @(
+                @{ number = 1; name = 'validate'; status = 'completed'; conclusion = 'failure' }
+                @{ number = 2; name = 'validate'; status = 'completed'; conclusion = 'success' }
+            ) }
+            { param($t) $t.Api.attempts['122/1'].workflow_id = 999 }
+            { param($t) $t.Api.attempts['122/1'].id = 999 }
+            { param($t) $t.Api.attempts['122/1'].run_attempt = 2 }
+            { param($t) $t.Api.attempts['122/1'].display_title = 'Backport PR 8 to 29.x (dry run = false)' }
+            { param($t) $t.Api.attempts['122/1'].event = 'workflow_dispatch' }
+            { param($t) $t.Api.attempts['122/1'].status = 'in_progress' }
+            { param($t) $t.Api.attempts['122/1'].conclusion = $null }
+            { param($t) $t.Api.runs[1].status = 'in_progress' }
+            { param($t) $t.Api.runs[1].conclusion = $null }
+            { param($t) $t.Api.runs[1].conclusion = 'unknown-conclusion' }
+            { param($t) $t.Api.runs[1].run_attempt = 101 }
+        )) {
+            $PolicyTest.Api.attempts['122/1'] = Copy-BackportTestValue $attempt
+            $PolicyTest.Api.jobs['122/1'] = Copy-BackportTestValue $page
+            $run.status = 'completed'; $run.run_attempt = 1; $run.conclusion = 'failure'
+            & $edit $PolicyTest
+            { & $PolicyCore { param($c) Assert-BackportFreshCreation $c } $PolicyTest.Config } |
+                Should -Throw -Because $edit.ToString()
+        }
+    }
+    It 'exempts noncanonical rejected-label titles only through complete non-writer proof' -Tag 'LT-06' {
+        $run = Add-BackportRejectedLabelRun $PolicyTest.Api -Title 'Backport PR  to 29.x (dry run = false)'
+        { & $PolicyCore { param($r) Get-BackportRunIdentity $r } $run } | Should -Throw
+        $identity = & $PolicyCore { param($r) Get-BackportRunIdentity $r -AllowRejectedLabel } $run
+        $identity.source_pr | Should -BeNullOrEmpty
+        $identity.dry_run | Should -BeFalse
+        & $PolicyCore { param($c) Assert-BackportFreshCreation $c } $PolicyTest.Config
+        $PolicyTest.Api.jobs['122/1'].jobs[1].conclusion = 'success'
+        { & $PolicyCore { param($c) Assert-BackportFreshCreation $c } $PolicyTest.Config } | Should -Throw
+        $PolicyTest.Api.jobs['122/1'].jobs[1].conclusion = 'skipped'
+        $PolicyTest.Config.event_name = 'pull_request_target'
+        $PolicyTest.Api.runs[0] = New-FakeWorkflowRun -Api $PolicyTest.Api -Event pull_request_target
+        $PolicyTest.Api.runs[0].display_title = $run.display_title
+        { & $PolicyCore { param($c) Assert-BackportFreshCreation $c } $PolicyTest.Config } | Should -Throw
+    }
+    It 'rejects a label run changing attempt or status after complete job proof' -Tag 'LT-06' {
+        $null = Add-BackportRejectedLabelRun $PolicyTest.Api
+        foreach ($field in @('run_attempt', 'status')) {
+            $PolicyTest.Api.calls.Clear()
+            $PolicyTest.HttpFilter = {
+                param($t, $method, $path, $data)
+                $value = Invoke-FakeGitHub $t.Api $method $path $data
+                if ($path.EndsWith('/actions/runs/122')) {
+                    $value[$field] = $(if ($field -ceq 'run_attempt') { 2 } else { 'in_progress' })
+                }
+                return ,$value
+            }
+            { & $PolicyCore { param($c) Assert-BackportFreshCreation $c } $PolicyTest.Config } | Should -Throw
+            @($PolicyTest.Api.calls | Where-Object path -CEQ '/repos/AleksanderGladkov/BCApps-Backport-Test/actions/runs/122/attempts/1/jobs?per_page=100&page=1').Count | Should -Be 1
+            @($PolicyTest.Api.calls | Where-Object path -CEQ '/repos/AleksanderGladkov/BCApps-Backport-Test/actions/runs/122').Count | Should -Be 1
+        }
+    }
+    It 'matches the current event and keeps reruns and queued writers conservative' -Tag 'LT-06', 'LT-08' {
+        $PolicyTest.Config.event_name = 'pull_request_target'
+        { & $PolicyCore { param($c) Assert-BackportFreshCreation $c } $PolicyTest.Config } | Should -Throw
+        $PolicyTest.Api.runs[0] = New-FakeWorkflowRun -Api $PolicyTest.Api -Event pull_request_target
+        & $PolicyCore { param($c) Assert-BackportFreshCreation $c } $PolicyTest.Config
+        $PolicyTest.Config.run_attempt = '2'; $PolicyTest.Api.runs[0].run_attempt = 2
+        { & $PolicyCore { param($c) Assert-BackportFreshCreation $c } $PolicyTest.Config } |
+            Should -Throw -ExpectedMessage 'previous_run_may_have_written'
+        $PolicyTest.Config.run_attempt = '1'; $PolicyTest.Api.runs[0].run_attempt = 1
+        $run = Add-BackportRejectedLabelRun $PolicyTest.Api
+        $run.status = 'queued'
+        { & $PolicyCore { param($c) Assert-BackportFreshCreation $c } $PolicyTest.Config } | Should -Throw
+    }
+    It 'strictly parses the exact policy schema and rejects duplicate JSON keys and types' -Tag 'LT-11' {
+        $bytes = New-BackportTestPolicyBytes
+        $policy = & $PolicyCore { param($b) ConvertFrom-BackportPolicyBytes -Bytes $b } $bytes
+        @($policy.allowed_actor_ids) | Should -Be @(59250993)
+        $policy.writes_enabled | Should -BeOfType bool
+        $raw = [Text.Encoding]::UTF8.GetString($bytes)
+        $invalid = @(
+            '{}', '[]', 'null', ($raw -replace '"schema":1', '"schema":1,"schema":1'),
+            ($raw -replace '"schema":1', '"Schema":1'), ($raw -replace '"schema":1', '"schema":2'),
+            ($raw -replace '"repository_id":1369849596', '"repository_id":"1369849596"'),
+            ($raw -replace '"repository_id":1369849596', '"repository_id":1'),
+            ($raw -replace '"writes_enabled":true', '"writes_enabled":"true"'),
+            ($raw -replace '"label_requests_enabled":true', '"label_requests_enabled":1'),
+            ($raw -replace '^\{', '{"extra":true,')
+        )
+        foreach ($actors in @('[]', '[59250993,59250993]', '["59250993"]', '[true]', '[0]', '[-1]', '[1.0]', '[1e0]', '59250993')) {
+            $invalid += $raw -replace '\[59250993\]', $actors
+        }
+        foreach ($text in $invalid) {
+            { & $PolicyCore { param($b) ConvertFrom-BackportPolicyBytes -Bytes $b } ([Text.Encoding]::UTF8.GetBytes($text)) } |
+                Should -Throw
+        }
+        foreach ($bytes in @([byte[]]@(), [byte[]]@(0xc0, 0xaf))) {
+            { & $PolicyCore { param($b) ConvertFrom-BackportPolicyBytes -Bytes $b } $bytes } |
+                Should -Throw
+        }
+    }
+    It 'intersects original current and sender numeric identities with both allowlists' -Tag 'LT-11' {
+        $PolicyTest.Config.event_name = 'pull_request_target'; $PolicyTest.Config.sender_id = 59250993
+        & $PolicyCore { param($c) Assert-BackportRequestPolicy -Config $c } $PolicyTest.Config
+        foreach ($field in @('actor_id', 'triggering_actor_id', 'sender_id')) {
+            $PolicyTest.Config[$field] = 12
+            $PolicyTest.Config.allowed_actor_ids = @(59250993, 12)
+            { & $PolicyCore { param($c) Assert-BackportRequestPolicy -Config $c } $PolicyTest.Config } |
+                Should -Throw -ExpectedMessage '*request_policy_actor_not_allowed*'
+            $PolicyTest.Config[$field] = 59250993
+        }
+        Set-BackportTestPolicy $PolicyTest (New-BackportTestPolicyBytes -Actors @(59250993, 12))
+        $PolicyTest.Config.allowed_actor_ids = @(59250993)
+        $PolicyTest.Config.triggering_actor_id = 12
+        { & $PolicyCore { param($c) Assert-BackportRequestPolicy -Config $c } $PolicyTest.Config } |
+            Should -Throw -ExpectedMessage '*request_policy_actor_not_allowed*'
+    }
+    It 'requires applicable switches but permits authorized read-only manual requests' -Tag 'LT-11' {
+        $checkedIn = & $PolicyCore {
+            param($b) ConvertFrom-BackportPolicyBytes -Bytes $b
+        } ([IO.File]::ReadAllBytes((Join-Path $PSScriptRoot 'request-policy.json')))
+        @($checkedIn.allowed_actor_ids) | Should -Be @(59250993)
+        $checkedIn.label_requests_enabled | Should -BeFalse
+        $checkedIn.writes_enabled | Should -BeTrue
+        foreach ($case in @(
+            @{ Event = 'workflow_dispatch'; Dry = $false; Labels = $false; Writes = $true; Allowed = $true }
+            @{ Event = 'workflow_dispatch'; Dry = $true; Labels = $false; Writes = $false; Allowed = $true }
+            @{ Event = 'workflow_dispatch'; Dry = $false; Labels = $true; Writes = $false; Allowed = $false }
+            @{ Event = 'pull_request_target'; Dry = $false; Labels = $false; Writes = $true; Allowed = $false }
+            @{ Event = 'pull_request_target'; Dry = $false; Labels = $true; Writes = $false; Allowed = $false }
+        )) {
+            Set-BackportTestPolicy $PolicyTest (New-BackportTestPolicyBytes -Labels $case.Labels -Writes $case.Writes)
+            $PolicyTest.Config.event_name = $case.Event; $PolicyTest.Config.dry_run = $case.Dry
+            $PolicyTest.Config.sender_id = $(if ($case.Event -ceq 'pull_request_target') { 59250993 } else { $null })
+            if ($case.Allowed) {
+                { & $PolicyCore { param($c) Assert-BackportRequestPolicy -Config $c } $PolicyTest.Config } | Should -Not -Throw
+            }
+            else {
+                { & $PolicyCore { param($c) Assert-BackportRequestPolicy -Config $c } $PolicyTest.Config } |
+                    Should -Throw -ExpectedMessage '*request_policy_*disabled*'
+            }
+        }
+        @($PolicyTest.Api.calls | Where-Object method -CNE GET).Count | Should -Be 0
+    }
+    It 'binds exact bytes rather than main SHA and never widens an old request' -Tag 'LT-13' {
+        & $PolicyCore { param($c) Assert-BackportRequestPolicy -Config $c } $PolicyTest.Config
+        $PolicyTest.Api.policy_main_sha = 'd' * 40
+        & $PolicyCore { param($c) Assert-BackportRequestPolicy -Config $c } $PolicyTest.Config
+        @($PolicyTest.Api.calls | Where-Object path -CEQ ('/repos/AleksanderGladkov/BCApps-Backport-Test/contents/.github/scripts/backport-demo/request-policy.json?ref=' + ('d' * 40))).Count | Should -Be 1
+        foreach ($bytes in @(
+            (New-BackportTestPolicyBytes -Actors @(59250993, 12)),
+            (New-BackportTestPolicyBytes -Labels $false),
+            ([Text.Encoding]::UTF8.GetBytes([Text.Encoding]::UTF8.GetString($PolicyTest.TrustedPolicyBytes) + "`n"))
+        )) {
+            Set-BackportTestPolicy $PolicyTest $bytes -LiveOnly
+            { & $PolicyCore { param($c) Assert-BackportRequestPolicy -Config $c } $PolicyTest.Config } |
+                Should -Throw -ExpectedMessage '*request_policy_changed*'
+        }
+    }
+    It 'rejects missing trusted data and malformed or unreadable main-pinned responses without fallback' -Tag 'LT-11', 'LT-13' {
+        foreach ($case in @(
+            @{ Route = '/git/ref/'; Edit = { param($r) $r.ref = 'refs/heads/other' } }
+            @{ Route = '/git/ref/'; Edit = { param($r) $r.object.type = 'tag' } }
+            @{ Route = '/git/ref/'; Edit = { param($r) $r.object.sha = 'main' } }
+            @{ Route = '/contents/'; Edit = { param($r) $r.type = 'symlink' } }
+            @{ Route = '/contents/'; Edit = { param($r) $r.path = 'untrusted.json' } }
+            @{ Route = '/contents/'; Edit = { param($r) $r.encoding = 'utf-8' } }
+            @{ Route = '/contents/'; Edit = { param($r) $r.content = 'not-base64!' } }
+            @{ Route = '/contents/'; Edit = { param($r) $r.size++ } }
+        )) {
+            $PolicyTest.HttpFilter = {
+                param($t, $method, $path, $data)
+                $result = Invoke-FakeGitHub $t.Api $method $path $data
+                if ($path.Contains($case.Route)) { & $case.Edit $result }
+                return ,$result
+            }
+            { & $PolicyCore { param($c) Assert-BackportRequestPolicy -Config $c } $PolicyTest.Config } |
+                Should -Throw
+        }
+        foreach ($suffix in @('/git/ref/', '/contents/')) {
+            $PolicyTest.HttpFilter = {
+                param($t, $method, $path, $data)
+                if ($path.Contains($suffix)) { throw 'api_read_failed' }
+                Invoke-FakeGitHub $t.Api $method $path $data
+            }
+            { & $PolicyCore { param($c) Assert-BackportRequestPolicy -Config $c } $PolicyTest.Config } |
+                Should -Throw -ExpectedMessage 'api_read_failed'
+        }
+        $PolicyTest.HttpFilter = $null; $PolicyTest.TrustedPolicyBytes = $null
+        { & $PolicyCore { param($c) Assert-BackportRequestPolicy -Config $c } $PolicyTest.Config } |
+            Should -Throw
+    }
+}
+
 Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
     BeforeAll {
         Import-Module (Join-Path $PSScriptRoot 'Backport.psm1') -Force
@@ -57,6 +389,9 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
         & $script:StageCore { param($t) $script:StageTest = $t } $script:T
         Mock -ModuleName Backport New-BackportHttpClient { throw 'network_forbidden' }
         Mock -ModuleName Backport Get-BackportToken { 'offline-fixture' }
+        if (& $script:StageCore { [bool](Get-Command Read-BackportTrustedPolicyBytes -ErrorAction SilentlyContinue) }) {
+            Mock -ModuleName Backport Read-BackportTrustedPolicyBytes { return ,$script:StageTest.TrustedPolicyBytes }
+        }
         Mock -ModuleName Backport Invoke-BackportHttp {
             param($Config, $Method, $Path, $Data)
             & $script:StageTest.Http $script:StageTest $Method $Path $Data
@@ -72,6 +407,247 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
     }
     AfterEach {
         Remove-LocalGitFixture $script:T.Fixture
+    }
+    It 'publishes a label through all four real stages with exact existing object content' -Tag 'L-002', 'LT-07' {
+        Set-BackportLabelStageConfig $T
+        $T.Config.event_name | Should -BeExactly 'pull_request_target'
+        $T.Config.sender_id | Should -Be 59250993
+        $published = Invoke-BackportTestStages $T -Last publish
+        $published.status | Should -BeExactly 'pr-created'
+        $T.Config.triggering_actor_id | Should -Be 59250993
+        $T.Api.issues.Count | Should -Be 1
+        $T.Api.pulls.Count | Should -Be 1
+        $T.Pushes.Count | Should -Be 1
+        @($T.Pushes[0] | Where-Object { $_ -clike '--force-with-lease=*' }) |
+            Should -Be @('--force-with-lease=refs/heads/backport/29.x/pr-7:')
+        (Invoke-StageFixtureGit $T @('show', 'backport/29.x/pr-7:src/one.al')) | Should -BeExactly "ONE`ntwo`nthree"
+        (Invoke-StageFixtureGit $T @('rev-parse', 'backport/29.x/pr-7^')) | Should -BeExactly $T.Fixture.Target
+        $marker = "<!-- bc-backport:v1:1369849596:7:$($T.Fixture.Source):29 -->"
+        $T.Api.issues[0].body | Should -BeExactly (
+            "Source: https://github.com/AleksanderGladkov/BCApps-Backport-Test/pull/7`nSource SHA: $($T.Fixture.Source)`n`n$marker"
+        )
+        $T.Api.issues[0].state | Should -BeExactly 'open'
+        $T.Api.pulls[0].body | Should -BeExactly (
+            "Backport of #7`nFixes #101`n`n$marker`nSource SHA: $($T.Fixture.Source)`nTarget base: $($T.Fixture.Target)`nApplied tree: $((Get-StageJson $T 'result.json').tree_sha)"
+        )
+        $body = "$marker`n<!-- bc-backport-status -->`nBackport #7 to 29.x: pr-created.`n$($published.pr_url)"
+        foreach ($number in @(101, 7)) {
+            $T.Api.comments[$number].Count | Should -Be 1
+            $T.Api.comments[$number][0].body | Should -BeExactly $body
+        }
+        @((Get-StageJson $T).Keys) | Should -Not -Contain 'event_name'
+        @((Get-StageJson $T).Keys) | Should -Not -Contain 'policy_digest'
+    }
+    It 'reuses manual then label relabel and rerun identities without additional creates' -Tag 'L-002', 'LT-08' {
+        $null = Invoke-BackportTestStages $T -Last publish
+        $head = Invoke-StageFixtureGit $T @('rev-parse', 'backport/29.x/pr-7')
+        $creates = @($T.Api.calls | Where-Object method -CEQ POST).Count
+        foreach ($pair in @(@('124', '1'), @('125', '1'), @('125', '2'))) {
+            New-StageAttempt $T $pair[0] $pair[1]
+            Set-BackportLabelStageConfig $T
+            (Invoke-BackportTestStages $T -Last publish).status | Should -BeExactly 'pr-reused'
+            $T.Api.issues[0].number | Should -Be 101
+            $T.Api.pulls[0].number | Should -Be 102
+            @($T.Api.calls | Where-Object method -CEQ POST).Count | Should -Be $creates
+            $T.Pushes.Count | Should -Be 1
+            (Invoke-StageFixtureGit $T @('rev-parse', 'backport/29.x/pr-7')) | Should -BeExactly $head
+            foreach ($number in @(101, 7)) { $T.Api.comments[$number].Count | Should -Be 1 }
+        }
+        @($T.Api.runs | Where-Object id -EQ 123)[0].event | Should -BeExactly 'workflow_dispatch'
+    }
+    It 'retains label source target and artifact verification and conflict-only feedback' -Tag 'L-002', 'LT-09', 'LT-12' {
+        Set-BackportLabelStageConfig $T
+        Set-StageConflict $T
+        (Invoke-BackportTestStages $T).status | Should -BeExactly 'needs-attention'
+        $plan = Get-StageJson $T
+        $T.Api.source.merge_commit_sha = 'f' * 40
+        { Invoke-BackportTestStage $T publish } | Should -Throw -ExpectedMessage 'source_changed'
+        $T.Api.source.merge_commit_sha = $T.Fixture.Source
+        Edit-StageJson $T 'plan.json' { param($p) $p.target_base_sha = 'f' * 40 }
+        { Invoke-BackportTestStage $T publish } | Should -Throw
+        Set-StageJson $T 'plan.json' $plan
+        Edit-StageJson $T 'result.json' { param($r) $r.run_attempt = '2' }
+        { Invoke-BackportTestStage $T publish } | Should -Throw -ExpectedMessage 'artifact_context_mismatch'
+        Edit-StageJson $T 'result.json' { param($r) $r.run_attempt = '1' }
+        $T.HttpFilter = {
+            param($t, $method, $path, $data)
+            $value = Invoke-FakeGitHub $t.Api $method $path $data
+            if ($method -ceq 'POST' -and $path.EndsWith('/issues/101/comments')) {
+                Set-BackportTestPolicy $t (New-BackportTestPolicyBytes -Labels $false) -LiveOnly
+            }
+            return ,$value
+        }
+        { Invoke-BackportTestStage $T publish } | Should -Throw -ExpectedMessage '*request_policy_changed*'
+        (Get-StageJson $T 'conflict.json').files[0].relative_path | Should -BeExactly 'src/one.al'
+        Assert-StageNoPublication $T
+        $T.Pushes.Count | Should -Be 0
+        $T.Api.comments[101][0].body | Should -Match 'needs-attention\.\nReason: cherry_pick_conflict\.'
+        $T.Api.comments.ContainsKey(7) | Should -BeFalse
+        (Get-StageJson $T 'publication.json').attempted | Should -Contain 'comment:101:create'
+    }
+    It 'checks current policy at each independent stage admission and preserves existing state' -Tag 'L-002', 'LT-11', 'LT-12' {
+        $null = Invoke-BackportTestStages $T
+        $before = Get-BackportReferenceSnapshot $T
+        Set-BackportTestPolicy $T (New-BackportTestPolicyBytes -Writes $false) -LiveOnly
+        $writes = @($T.Api.calls | Where-Object method -CNE GET).Count
+        foreach ($stage in @('validate', 'track', 'prepare', 'publish')) {
+            { Invoke-BackportTestStage $T $stage } | Should -Throw -ExpectedMessage '*request_policy_*'
+        }
+        @($T.Api.calls | Where-Object method -CNE GET).Count | Should -Be $writes
+        $T.Pushes.Count | Should -Be 0
+        $after = Get-BackportReferenceSnapshot $T
+        (Get-StageHash (ConvertTo-BackportReferenceBytes $after.artifacts)) |
+            Should -BeExactly (Get-StageHash (ConvertTo-BackportReferenceBytes $before.artifacts))
+        $T.Api.issues[0].number | Should -Be 101
+    }
+    It 'stops <Phase> <Boundary> without later writes and retains partial objects and journals' -Tag 'L-002', 'LT-12' -ForEach @(
+        @{ Phase = 'before'; Boundary = 'Issue'; Stage = 'track'; History = 1; Posts = 0; Pushes = 0; Issues = 0; Pulls = 0; Comments = 0 }
+        @{ Phase = 'after'; Boundary = 'Issue'; Stage = 'track'; History = 0; Posts = 1; Pushes = 0; Issues = 1; Pulls = 0; Comments = 0 }
+        @{ Phase = 'before'; Boundary = 'push'; Stage = 'publish'; History = 1; Posts = 0; Pushes = 0; Issues = 1; Pulls = 0; Comments = 0 }
+        @{ Phase = 'after'; Boundary = 'push'; Stage = 'publish'; History = 0; Posts = 0; Pushes = 1; Issues = 1; Pulls = 0; Comments = 0 }
+        @{ Phase = 'before'; Boundary = 'PR'; Stage = 'publish'; History = 2; Posts = 0; Pushes = 1; Issues = 1; Pulls = 0; Comments = 0 }
+        @{ Phase = 'after'; Boundary = 'PR'; Stage = 'publish'; History = 0; Posts = 1; Pushes = 1; Issues = 1; Pulls = 1; Comments = 0 }
+        @{ Phase = 'before'; Boundary = 'tracking comment'; Stage = 'publish'; History = 3; Posts = 1; Pushes = 1; Issues = 1; Pulls = 1; Comments = 0 }
+        @{ Phase = 'after'; Boundary = 'tracking comment'; Stage = 'publish'; History = 0; Posts = 2; Pushes = 1; Issues = 1; Pulls = 1; Comments = 1 }
+        @{ Phase = 'before'; Boundary = 'source comment'; Stage = 'publish'; History = 4; Posts = 2; Pushes = 1; Issues = 1; Pulls = 1; Comments = 1 }
+        @{ Phase = 'after'; Boundary = 'source comment'; Stage = 'publish'; History = 0; Posts = 3; Pushes = 1; Issues = 1; Pulls = 1; Comments = 2 }
+    ) {
+        $null = Invoke-BackportTestStages $T -Last $(if ($Stage -ceq 'track') { 'validate' } else { 'prepare' })
+        $T.Api.calls.Clear()
+        $T.Boundary = @{ Phase = $Phase; Name = $Boundary; History = $History }
+        $T.HttpFilter = {
+            param($t, $method, $path, $data)
+            $value = Invoke-FakeGitHub $t.Api $method $path $data
+            $hit = $false
+            if ($t.Boundary.Phase -ceq 'before' -and $path.Contains('/actions/workflows/')) {
+                $t.HistoryReads++
+                $hit = $t.HistoryReads -eq $t.Boundary.History
+            }
+            elseif ($t.Boundary.Phase -ceq 'after') {
+                $hit = switch ($t.Boundary.Name) {
+                    Issue { $method -ceq 'GET' -and $path.EndsWith('/issues/101') }
+                    PR { $method -ceq 'GET' -and $path.EndsWith('/pulls/102') }
+                    'tracking comment' { $method -ceq 'POST' -and $path.EndsWith('/issues/101/comments') }
+                    'source comment' { $method -ceq 'POST' -and $path.EndsWith('/issues/7/comments') }
+                    default { $false }
+                }
+            }
+            if ($hit) {
+                $t.BoundarySeen = $true
+                Set-BackportTestPolicy $t (New-BackportTestPolicyBytes -Writes $false) -LiveOnly
+            }
+            return ,$value
+        }
+        if ($Phase -ceq 'after' -and $Boundary -ceq 'push') {
+            $T.AfterPush = {
+                param($t)
+                $t.BoundarySeen = $true
+                Set-BackportTestPolicy $t (New-BackportTestPolicyBytes -Writes $false) -LiveOnly
+            }
+        }
+        $T.Config.output = Join-Path $T.Fixture.Root 'withdrawal-output'
+        { Invoke-BackportTestStage $T $Stage } | Should -Throw -ExpectedMessage '*request_policy_*'
+        $T.BoundarySeen | Should -BeTrue
+        @($T.Api.calls | Where-Object method -CEQ POST).Count | Should -Be $Posts
+        @($T.Api.calls | Where-Object method -CEQ PATCH).Count | Should -Be 0
+        $T.Pushes.Count | Should -Be $Pushes
+        $T.Api.issues.Count | Should -Be $Issues
+        $T.Api.pulls.Count | Should -Be $Pulls
+        @($T.Api.comments.Values | ForEach-Object { $_.ToArray() }).Count | Should -Be $Comments
+        Test-Path -LiteralPath $T.Config.output | Should -BeFalse
+        if ($Issues) { Test-Path -LiteralPath (Join-Path $T.Config.state_dir 'tracking.json') | Should -BeTrue }
+        if ($Pushes) {
+            (Get-StageJson $T 'publication.json').attempted | Should -Contain 'push'
+            (Invoke-StageFixtureGit $T @('rev-parse', 'backport/29.x/pr-7')) | Should -Match '^[0-9a-f]{40}$'
+        }
+        if ($Pulls) { (Get-StageJson $T 'publication.json').attempted | Should -Contain 'pr' }
+        if ($Comments -gt 0) { (Get-StageJson $T 'publication.json').attempted | Should -Contain 'comment:101:create' }
+        if ($Comments -gt 1) { (Get-StageJson $T 'publication.json').attempted | Should -Contain 'comment:7:create' }
+    }
+    It 'checks before and after each existing feedback PATCH and before exact-body reuse' -Tag 'L-002', 'LT-12' {
+        $null = Invoke-BackportTestStages $T -Last publish
+        $originalComments = Copy-BackportTestValue (ConvertTo-StageComments $T.Api.comments)
+        $journal = Get-StageJson $T 'publication.json'
+        foreach ($case in @(
+            @{ Number = 101; Phase = 'before'; Patches = 0 }
+            @{ Number = 101; Phase = 'after'; Patches = 1 }
+            @{ Number = 7; Phase = 'before'; Patches = 1 }
+            @{ Number = 7; Phase = 'after'; Patches = 2 }
+            @{ Number = 101; Phase = 'reuse'; Patches = 0 }
+            @{ Number = 7; Phase = 'reuse'; Patches = 0 }
+        )) {
+            Set-BackportTestPolicy $T $T.TrustedPolicyBytes -LiveOnly
+            Set-StageJson $T 'publication.json' $journal
+            foreach ($number in @(101, 7)) {
+                $T.Api.comments[$number][0].body = $originalComments[[string]$number][0].body
+                if ($case.Phase -ceq 'reuse') {
+                    $T.Api.comments[$number][0].body = $T.Api.comments[$number][0].body.Replace('pr-created.', 'pr-reused.')
+                }
+            }
+            $T.Api.calls.Clear(); $T.BoundarySeen = $false; $T.Boundary = $case
+            $T.HttpFilter = {
+                param($t, $method, $path, $data)
+                $value = Invoke-FakeGitHub $t.Api $method $path $data
+                $number = $t.Boundary.Number
+                $hit = if ($t.Boundary.Phase -ceq 'after') {
+                    $method -ceq 'PATCH' -and $path.EndsWith('/issues/comments/' + $t.Api.comments[$number][0].id)
+                }
+                else { $method -ceq 'GET' -and $path.Contains("/issues/$number/comments?") }
+                if ($hit) {
+                    $t.BoundarySeen = $true
+                    Set-BackportTestPolicy $t (New-BackportTestPolicyBytes -Actors @(12)) -LiveOnly
+                }
+                return ,$value
+            }
+            { Invoke-BackportTestStage $T publish } | Should -Throw -ExpectedMessage '*request_policy_*'
+            $T.BoundarySeen | Should -BeTrue
+            @($T.Api.calls | Where-Object method -CEQ PATCH).Count | Should -Be $case.Patches
+            @($T.Api.calls | Where-Object method -CEQ POST).Count | Should -Be 0
+            $T.Api.issues.Count | Should -Be 1; $T.Api.pulls.Count | Should -Be 1
+            foreach ($number in @(101, 7)) { $T.Api.comments[$number].Count | Should -Be 1 }
+        }
+    }
+    It 'stops Issue and PR reuse and feedback-only recovery when the fresh policy read disappears' -Tag 'L-002', 'LT-12', 'LT-13' {
+        $T.Api.lose_post_response = '/repos/AleksanderGladkov/BCApps-Backport-Test/issues/101/comments'
+        { Invoke-BackportTestStages $T -Last publish } | Should -Throw -ExpectedMessage 'api_write_ambiguous'
+        $T.Api.lose_post_response = $null
+        $journal = [IO.File]::ReadAllBytes((Join-Path $T.Config.state_dir 'publication.json'))
+        foreach ($stage in @('track', 'publish')) {
+            $T.Api.calls.Clear(); $T.BoundarySeen = $false
+            $T.Boundary = $(if ($stage -ceq 'track') { '/issues/101' } else { '/pulls/102' })
+            $T.HttpFilter = {
+                param($t, $method, $path, $data)
+                if ($t.BoundarySeen -and $path.Contains('/contents/')) { throw 'api_read_failed' }
+                $value = Invoke-FakeGitHub $t.Api $method $path $data
+                if ($method -ceq 'GET' -and $path.EndsWith($t.Boundary)) { $t.BoundarySeen = $true }
+                return ,$value
+            }
+            { Invoke-BackportTestStage $T $stage } | Should -Throw -ExpectedMessage 'api_read_failed'
+            @($T.Api.calls | Where-Object method -CNE GET).Count | Should -Be 0
+            [Convert]::ToHexString([IO.File]::ReadAllBytes((Join-Path $T.Config.state_dir 'publication.json'))) |
+                Should -BeExactly ([Convert]::ToHexString($journal))
+        }
+        $T.Api.issues.Count | Should -Be 1; $T.Api.pulls.Count | Should -Be 1
+        $T.Api.comments[101].Count | Should -Be 1
+        $T.Api.comments.ContainsKey(7) | Should -BeFalse
+        $T.Pushes.Count | Should -Be 1
+    }
+    It 'allows only the in-flight Issue when policy changes after the final checked bytes were returned' -Tag 'L-002', 'LT-13' {
+        $null = Invoke-BackportTestStage $T validate
+        $T.HttpFilter = {
+            param($t, $method, $path, $data)
+            $value = Invoke-FakeGitHub $t.Api $method $path $data
+            if ($path.Contains('/actions/workflows/')) { $t.BoundarySeen = $true }
+            if ($t.BoundarySeen -and $path.Contains('/contents/')) {
+                Set-BackportTestPolicy $t (New-BackportTestPolicyBytes -Writes $false) -LiveOnly
+            }
+            return ,$value
+        }
+        { Invoke-BackportTestStage $T track } | Should -Throw -ExpectedMessage '*request_policy_changed*'
+        $T.Api.issues.Count | Should -Be 1
+        @($T.Api.calls | Where-Object method -CNE GET).Count | Should -Be 1
+        $T.Api.pulls.Count | Should -Be 0; $T.Api.comments.Count | Should -Be 0; $T.Pushes.Count | Should -Be 0
+        Test-Path -LiteralPath (Join-Path $T.Config.state_dir 'tracking.json') | Should -BeTrue
     }
     It 'normalizes the raw merged-main label into the existing validated binding' -Tag 'L-001', 'LT-01' {
         $T.Environment.GITHUB_EVENT_NAME = 'pull_request_target'
@@ -96,10 +672,13 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
         $T.Environment[$Key] = $Value
         Assert-BackportRequestRejected $T
     }
-    It 'keeps explicit manual <Dry> semantics through all existing stages' -Tag 'L-001', 'LT-02' -ForEach @(
+    It 'keeps explicit manual <Dry> semantics through all existing stages' -Tag 'L-001', 'LT-02', 'L-002', 'LT-11' -ForEach @(
         @{ Dry = 'true' }, @{ Dry = 'false' }
     ) {
         $T.Environment.INPUT_DRY_RUN = $Dry
+        if ($Dry -ceq 'true') {
+            Set-BackportTestPolicy $T (New-BackportTestPolicyBytes -Labels $false -Writes $false)
+        }
         Set-BackportStageConfig $T
         $T.Config.dry_run | Should -Be ($Dry -ceq 'true')
         $result = Invoke-BackportTestStages $T -Last publish
@@ -295,7 +874,7 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
         Set-BackportTestEventFile $T.Environment $event
         Assert-BackportRequestRejected $T
     }
-    It 'retains authoritative current-user IDs for label reruns: <Current>' -Tag 'L-001', 'LT-04' -ForEach @(
+    It 'retains authoritative current-user IDs for label reruns: <Current>' -Tag 'L-001', 'LT-04', 'L-002', 'LT-11' -ForEach @(
         @{ Current = 59250993; Allowed = $true }, @{ Current = 12; Allowed = $true }
         @{ Current = 13; Allowed = $false }, @{ Current = '59250993'; Allowed = $false }
         @{ Current = $true; Allowed = $false }
@@ -305,8 +884,12 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
         $T.Environment.GITHUB_RUN_ATTEMPT = '2'
         Set-BackportTestEventFile $T.Environment (New-BackportLabelTestEvent $T)
         Set-BackportStageConfig $T
+        Set-BackportTestPolicy $T (New-BackportTestPolicyBytes -Actors @(59250993, 12))
         $T.Api.actor = $Current
-        if ($Allowed) { (Invoke-BackportTestStage $T validate).source_pr | Should -Be 7 }
+        if ($Allowed) {
+            (Invoke-BackportTestStage $T validate).source_pr | Should -Be 7
+            $T.Config.triggering_actor_id | Should -Be $Current
+        }
         else { { Invoke-BackportTestStage $T validate } | Should -Throw -ExpectedMessage 'triggering_actor_not_allowed' }
         @($T.Api.calls | Where-Object method -CNE 'GET').Count | Should -Be 0
         $T.Pushes.Count | Should -Be 0
@@ -605,7 +1188,7 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
         }
         $T.Api.pulls.Count | Should -Be 0
     }
-    It 'test_result_and_patch_tampering_fail_closed' {
+    It 'test_result_and_patch_tampering_fail_closed' -Tag 'L-002', 'LT-09' {
         $null = Invoke-BackportTestStages $T
         $original = Get-StageJson $T 'result.json'
         foreach ($edit in @(
@@ -682,7 +1265,7 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
         (Invoke-BackportTestStage $T track).issue_number | Should -Be 101
         $T.Api.issues.Count | Should -Be 1
     }
-    It 'test_lost_issue_response_with_stale_listing_blocks_new_attempt_and_run' -Tag 'TEST-019' {
+    It 'test_lost_issue_response_with_stale_listing_blocks_new_attempt_and_run' -Tag 'TEST-019', 'L-002', 'LT-08' {
         $route = '/repos/AleksanderGladkov/BCApps-Backport-Test/issues'
         $null = Invoke-BackportTestStage $T validate
         $T.Api.lose_post_response = $route
@@ -700,7 +1283,7 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
         @($T.Api.calls | Where-Object method -CEQ 'POST').Count | Should -Be 1
         $T.Api.issues.Count | Should -Be 1
     }
-    It 'test_lost_source_comment_response_stale_on_rerun_never_reposts' -Tag 'TEST-019' {
+    It 'test_lost_source_comment_response_stale_on_rerun_never_reposts' -Tag 'TEST-019', 'L-002', 'LT-08' {
         $null = Invoke-BackportTestStages $T
         $route = '/repos/AleksanderGladkov/BCApps-Backport-Test/issues/7/comments'
         $T.Api.lose_post_response = $route
@@ -724,7 +1307,7 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
         @($T.Api.calls | Where-Object method -CEQ 'PATCH').Count | Should -BeGreaterThan 0
         @($T.Api.comments.Values | ForEach-Object Count) | Should -Be @(1, 1)
     }
-    It 'test_incomplete_feedback_does_not_guess_recovery_on_new_attempt' -Tag 'TEST-019' {
+    It 'test_incomplete_feedback_does_not_guess_recovery_on_new_attempt' -Tag 'TEST-019', 'L-002', 'LT-08' {
         $null = Invoke-BackportTestStages $T
         $route = '/repos/AleksanderGladkov/BCApps-Backport-Test/issues/101/comments'
         $T.Api.lose_post_response = $route
@@ -778,7 +1361,7 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
         (Invoke-BackportTestStages $T -Last publish).status | Should -BeExactly 'pr-created'
         @($T.Api.calls | Where-Object path -CEQ '/repos/AleksanderGladkov/BCApps-Backport-Test/actions/runs/123').Count | Should -Be 5
     }
-    It 'test_history_gate_blocks_any_previous_nondry_conclusion' -Tag 'TEST-019' {
+    It 'test_history_gate_blocks_any_previous_nondry_conclusion' -Tag 'TEST-019', 'L-002', 'LT-06' {
         $null = Invoke-BackportTestStage $T validate
         $previous = New-FakeWorkflowRun -Api $T.Api -Id 122
         $T.Api.runs.Add($previous)
@@ -865,7 +1448,7 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
         { & $T.Module { param($c) Assert-BackportFreshCreation -Config $c } $T.Config } |
             Should -Throw -ExpectedMessage 'previous_run_may_have_written'
     }
-    It 'test_history_rejects_incomplete_duplicate_missing_current_and_oversize_pages' -Tag 'TEST-019' {
+    It 'test_history_rejects_incomplete_duplicate_missing_current_and_oversize_pages' -Tag 'TEST-019', 'L-002', 'LT-06' {
         $current = $T.Api.runs[0]
         $dry = New-FakeWorkflowRun -Api $T.Api -Id 122 -DryRun $true
         $wrongAttempt = Copy-BackportTestValue $current
@@ -1054,7 +1637,7 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
         @($T.Api.calls | Where-Object { $_.method -ceq 'POST' -and $_.path -ceq $route }).Count | Should -Be 1
         (Get-StageJson $T 'publication.json').attempted | Should -Contain 'pr'
     }
-    It 'test_lost_pr_create_response_reuses_verified_pr' {
+    It 'test_lost_pr_create_response_reuses_verified_pr' -Tag 'L-002', 'LT-08' {
         $null = Invoke-BackportTestStages $T
         $T.Api.lose_post_response = '/repos/AleksanderGladkov/BCApps-Backport-Test/pulls'
         { Invoke-BackportTestStage $T publish } | Should -Throw -ExpectedMessage 'api_write_ambiguous'
@@ -1380,7 +1963,7 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
         (Get-StageJson $T 'result.json').published | Should -BeFalse
         (Get-StageJson $T 'publication.json').attempted | Should -Contain 'pr'
     }
-    It 'preserves captured stage handoffs and PowerShell equivalents with identical bindings' -Tag 'TEST-018' {
+    It 'preserves captured stage handoffs and PowerShell equivalents with identical bindings' -Tag 'TEST-018', 'L-002' {
         $pythonFirst = New-BackportStageTest -ParentPath $script:HarnessRoot -Module $T.Module -Template $T
         $powershellFirst = New-BackportStageTest -ParentPath $script:HarnessRoot -Module $T.Module -Template $T
         try {
@@ -1576,8 +2159,11 @@ Describe 'Label workflow admission contract' -Tag 'L-001', 'LT-05' {
         $production | Should -Match '(?m)^  publish:\n    needs: prepare$'
         [regex]::Matches($production, 'ref: \$\{\{ github.workflow_sha \}\}\n          persist-credentials: false\n          sparse-checkout: .github/scripts/backport-demo').Count | Should -Be 4
     }
-    It 'requires LT-01 through LT-05 in full acceptance without changing parity history' {
-        foreach ($id in 1..5) {
+    It 'requires every implemented label ID without reserving LT-10 prematurely' -Tag 'L-002', 'LT-06', 'LT-11' {
+        $complete = Test-BackportAcceptance (New-SyntheticResult) (New-SyntheticParity)
+        $complete.Accepted | Should -BeTrue
+        $complete.LabelPassed | Should -Be 12
+        foreach ($id in (1..9 + 11..13)) {
             $result = New-SyntheticResult
             $tag = 'LT-{0:d2}' -f $id
             $result.Tests = @($result.Tests | Where-Object { $_.Tag -cnotcontains $tag })
@@ -2030,14 +2616,15 @@ Describe 'Configuration and safe CLI compatibility' -Tag 'EPIC-002', 'TEST-020' 
                 Should -Throw '*overlapping_directories*'
         }
     }
-    It 'rejects work containing trusted code and unsafe output locations' {
+    It 'rejects work containing trusted code and unsafe output locations' -Tag 'L-002', 'LT-11' {
         $envMap = New-CoreEnvironment
         $envMap.WORK_DIR = $PSScriptRoot
         { & $script:Core { param($e) New-BackportContext -Environment $e } $envMap } |
             Should -Throw '*script_inside_work_directory*'
         $envMap = New-CoreEnvironment
         foreach ($path in @((Join-Path $PSScriptRoot 'Backport.psm1'),
-            (Join-Path $PSScriptRoot 'compat.json'), (Join-Path $script:HarnessRoot 'backport-state\plan.json'),
+            (Join-Path $PSScriptRoot 'compat.json'), (Join-Path $PSScriptRoot 'request-policy.json'),
+            (Join-Path $script:HarnessRoot 'backport-state\plan.json'),
             (Join-Path $script:HarnessRoot 'backport-work\out'), $script:HarnessRoot)) {
             $envMap.GITHUB_OUTPUT = $path
             { & $script:Core { param($e) New-BackportContext -Environment $e } $envMap } |
@@ -2046,6 +2633,11 @@ Describe 'Configuration and safe CLI compatibility' -Tag 'EPIC-002', 'TEST-020' 
         $envMap.GITHUB_OUTPUT = $envMap.GITHUB_STEP_SUMMARY = Join-Path $script:HarnessRoot 'same.txt'
         { & $script:Core { param($e) New-BackportContext -Environment $e } $envMap } |
             Should -Throw '*invalid_output_path*'
+        foreach ($key in @('STATE_DIR', 'WORK_DIR')) {
+            $envMap = New-CoreEnvironment
+            $envMap[$key] = Join-Path $PSScriptRoot 'request-policy.json'
+            { & $script:Core { param($e) New-BackportContext -Environment $e } $envMap } | Should -Throw
+        }
     }
     It 'rejects missing local directories and files used as directory roots' {
         $envMap = New-CoreEnvironment
@@ -2741,6 +3333,23 @@ Describe 'Pinned runner boundary' -Tag 'EPIC-001' {
         Should -Invoke Import-Module -Times 1 -Exactly -ParameterFilter {
             $Name -eq 'Pester' -and $RequiredVersion -eq '5.7.1'
         }
+    }
+
+    It 'selects L-002 through the real runner without claiming full acceptance' -Tag 'L-002', 'LT-06', 'LT-11' {
+        Mock Invoke-Pester {
+            $script:CapturedConfiguration = $Configuration
+            $result = New-SyntheticDevelopmentResult
+            $result.Tests[0].Tag = @('L-002')
+            $result
+        }
+        Mock Import-Module {} -ParameterFilter { $Name -eq 'Pester' -and $RequiredVersion -eq '5.7.1' }
+        $gate = Invoke-BackportTests -Epic L-002 -ResultPath (Join-Path $script:HarnessRoot 'l002-selection.xml')
+        $gate.ExitCode | Should -Be 0
+        $gate.Mode | Should -BeExactly 'Development'
+        $gate.Message | Should -BeExactly 'Development L-002 - NOT full acceptance.'
+        @($script:CapturedConfiguration.Filter.Tag.Value) | Should -Be @('L-002')
+        $script:CapturedConfiguration.TestDrive.Enabled.Value | Should -BeFalse
+        Should -Invoke Invoke-Pester -Times 1 -Exactly
     }
 
     It 'returns nonzero for a mocked failing runner' {

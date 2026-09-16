@@ -28,6 +28,36 @@ function New-BackportLabelTestEvent {
     }
 }
 
+function Set-BackportLabelStageConfig {
+    param($Test)
+    $Test.Environment.GITHUB_EVENT_NAME = 'pull_request_target'
+    $Test.Environment.INPUT_DRY_RUN = 'false'
+    Set-BackportTestEventFile $Test.Environment (New-BackportLabelTestEvent $Test)
+    Set-BackportStageConfig $Test
+}
+
+function New-BackportTestPolicyBytes {
+    param([object[]]$Actors = @(59250993), [bool]$Labels = $true, [bool]$Writes = $true)
+    return ,([Text.Encoding]::UTF8.GetBytes((ConvertTo-Json -Compress -Depth 10 -InputObject @{
+        schema = 1; repository_id = 1369849596; allowed_actor_ids = $Actors
+        label_requests_enabled = $Labels; writes_enabled = $Writes
+    })))
+}
+
+function Set-BackportTestPolicy {
+    param($Test, [byte[]]$Bytes, [switch]$LiveOnly)
+    $Test.Api.policy_bytes = $Bytes.Clone()
+    if (-not $LiveOnly) { $Test.TrustedPolicyBytes = $Bytes.Clone() }
+}
+
+function Test-BackportPolicyGet {
+    param($Call)
+    $Call.method -ceq 'GET' -and (
+        $Call.path -ceq '/repos/AleksanderGladkov/BCApps-Backport-Test/git/ref/heads/main' -or
+        $Call.path -cmatch '\A/repos/AleksanderGladkov/BCApps-Backport-Test/contents/\.github/scripts/backport-demo/request-policy\.json\?ref=[0-9a-f]{40}\z'
+    )
+}
+
 function Assert-BackportRequestRejected {
     param($Test)
     foreach ($stage in @('validate', 'track', 'prepare', 'publish')) {
@@ -99,10 +129,13 @@ function New-BackportStageTest {
         OriginalProcess = $(if ($Template) { $Template.OriginalProcess } else { & $Module { (Get-Command Invoke-BackportProcess).ScriptBlock } })
         Process = ${function:Invoke-BackportStageProcess}
         HttpFilter = $null; BeforePush = $null; AfterPush = $null
+        TrustedPolicyBytes = $null
+        Boundary = $null; BoundarySeen = $false; HistoryReads = 0
         Pushes = [Collections.Generic.List[object]]::new()
         GitCalls = [Collections.Generic.List[object]]::new()
         GitEffects = [Collections.Generic.List[object]]::new()
     }
+    $test.TrustedPolicyBytes = $test.Api.policy_bytes.Clone()
     Set-BackportStageConfig $test
     $test
 }
@@ -135,7 +168,7 @@ function Set-BackportStageConfig {
     }
     $Test.Config = & $Test.Module { param($e) New-BackportContext -Environment $e } $Test.Environment
     $current = New-FakeWorkflowRun -Api $Test.Api -Id ([long]$Test.Config.run_id) -Attempt ([int]$Test.Config.run_attempt) `
-        -SourcePr $Test.Config.source_pr -DryRun $Test.Config.dry_run
+        -SourcePr $Test.Config.source_pr -DryRun $Test.Config.dry_run -Event $Test.Environment.GITHUB_EVENT_NAME
     $existing = @($Test.Api.runs | Where-Object id -EQ $current.id)
     if ($existing.Count) {
         foreach ($key in $current.Keys) { $existing[0][$key] = $current[$key] }
@@ -444,7 +477,8 @@ function Get-StageReceipt {
         outcome = $Outcome; artifacts = $artifacts
         output = [IO.File]::ReadAllText($Test.Config.output)
         summary = [IO.File]::ReadAllText($Test.Config.summary)
-        calls = @($Test.Api.calls.ToArray()); issues = @($Test.Api.issues.ToArray())
+        calls = @($Test.Api.calls | Where-Object { -not (Test-BackportPolicyGet $_) })
+        issues = @($Test.Api.issues.ToArray())
         git_effects = @($Test.GitEffects.ToArray())
         pulls = @($Test.Api.pulls.ToArray()); comments = (ConvertTo-StageComments $Test.Api.comments)
         refs = (Invoke-StageFixtureGit $Test @('show-ref'))
@@ -504,6 +538,8 @@ function Get-BackportReferenceSnapshot {
     foreach ($key in @('repo', 'source', 'commits', 'target', 'actor', 'issues', 'pulls', 'comments', 'calls', 'runs')) {
         $api[$key] = if ($key -ceq 'comments') { ConvertTo-StageComments $Test.Api.comments } else { Copy-BackportTestValue $Test.Api.$key }
     }
+    # The frozen manual oracle predates only these two fixed policy GET routes.
+    $api.calls = @($api.calls | Where-Object { -not (Test-BackportPolicyGet $_) })
     $snapshot = @{
         artifacts = $artifacts; api = $api; git_effects = @($Test.GitEffects.ToArray())
         refs = (Invoke-StageFixtureGit $Test @('show-ref')); output = $null; summary = $null
@@ -660,6 +696,8 @@ function New-FakeGitHub {
         fail_post = $null; lose_post_response = $null
         fail_patch = $null; lose_patch_response = $null
         runs = [Collections.Generic.List[object]]::new()
+        attempts = @{}; jobs = @{}
+        policy_bytes = (New-BackportTestPolicyBytes); policy_main_sha = ('c' * 40)
         stale_paths = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
     }
     foreach ($commit in $Commits) { $api.commits.Add(@{ sha = $commit }) }
@@ -672,15 +710,49 @@ function New-FakeWorkflowRun {
         [long]$Id = 123,
         [int]$SourcePr = 7,
         [bool]$DryRun = $false,
-        [int]$Attempt = 1
+        [int]$Attempt = 1,
+        [ValidateSet('workflow_dispatch', 'pull_request_target')][string]$Event = 'workflow_dispatch'
     )
-    @{
+    $run = @{
         id = $Id; workflow_id = 456; run_attempt = $Attempt
         repository = (Copy-BackportTestValue $Api.repo)
         head_repository = (Copy-BackportTestValue $Api.repo)
-        path = '.github/workflows/backport-demo.yml'; event = 'workflow_dispatch'; head_branch = 'main'
+        path = '.github/workflows/backport-demo.yml'; event = $Event; head_branch = 'main'
         display_title = "Backport PR $SourcePr to 29.x (dry run = $($DryRun.ToString().ToLowerInvariant()))"
     }
+    if ($Event -ceq 'pull_request_target') {
+        $run.name = 'Backport to 29.x'
+        $run.head_sha = $Api.source.merge_commit_sha
+        $run.status = 'in_progress'; $run.conclusion = $null
+        $run.pull_requests = @()
+    }
+    return $run
+}
+
+function Add-BackportRejectedLabelRun {
+    param($Api, [long]$Id = 122, [int]$Attempts = 1, [string]$Title)
+    $run = New-FakeWorkflowRun -Api $Api -Id $Id -Attempt $Attempts -Event pull_request_target
+    if ($PSBoundParameters.ContainsKey('Title')) { $run.display_title = $Title }
+    $run.status = 'completed'; $run.conclusion = 'failure'
+    $Api.runs.Add($run)
+    foreach ($attempt in 1..$Attempts) {
+        $value = Copy-BackportTestValue $run
+        $value.run_attempt = $attempt
+        $Api.attempts["$Id/$attempt"] = $value
+        $jobs = @(
+            foreach ($index in 0..3) {
+                @{
+                    id = (10000 * $attempt + $index + 1); run_id = $Id; run_attempt = $attempt
+                    head_sha = $run.head_sha; head_branch = $run.head_branch; workflow_name = $run.display_title
+                    name = @('validate', 'track', 'prepare', 'publish')[$index]
+                    status = 'completed'; conclusion = $(if ($index -eq 0) { 'failure' } else { 'skipped' })
+                    steps = @()
+                }
+            }
+        )
+        $Api.jobs["$Id/$attempt"] = @{ total_count = 4; jobs = $jobs }
+    }
+    return $run
 }
 
 function Invoke-FakeGitHub {
@@ -709,7 +781,10 @@ function Invoke-FakeGitHub {
     }
     if ($query.ContainsKey('per_page') -and $query.per_page -ne '100') { throw 'unexpected_fake_request: page size' }
     foreach ($key in $query.Keys) {
-        if ($key -notin @('page', 'per_page', 'state')) { throw 'unexpected_fake_request: query key' }
+        if ($key -notin @('page', 'per_page', 'state') -and -not (
+            $key -ceq 'ref' -and $Method -ceq 'GET' -and
+            $route -ceq "$root/contents/.github/scripts/backport-demo/request-policy.json"
+        )) { throw 'unexpected_fake_request: query key' }
     }
     if ($Method -ceq 'POST' -and $Api.fail_post -ceq $route) { throw 'api_write_ambiguous' }
     if ($Method -ceq 'PATCH' -and $Api.fail_patch -ceq $route) { throw 'api_write_ambiguous' }
@@ -723,6 +798,17 @@ function Invoke-FakeGitHub {
                 $value = @{ id = $Api.actor; login = 'AleksanderGladkov' }
             }
             elseif ($route -ceq $root) { $value = $Api.repo }
+            elseif ($route -ceq "$root/git/ref/heads/main") {
+                if ($query.Count -ne 0) { throw 'unexpected_fake_request: main ref query' }
+                $value = @{ ref = 'refs/heads/main'; object = @{ type = 'commit'; sha = $Api.policy_main_sha } }
+            }
+            elseif ($route -ceq "$root/contents/.github/scripts/backport-demo/request-policy.json") {
+                if ($query.Count -ne 1 -or $query.ref -cne $Api.policy_main_sha) { throw 'unexpected_fake_request: policy revision' }
+                $value = @{
+                    type = 'file'; path = '.github/scripts/backport-demo/request-policy.json'; encoding = 'base64'
+                    content = [Convert]::ToBase64String($Api.policy_bytes); size = $Api.policy_bytes.Length
+                }
+            }
             elseif ($route -ceq "$root/pulls/7") { $value = $Api.source }
             elseif ($route -ceq "$root/pulls/7/commits") {
                 $value = @($Api.commits | Select-Object -Skip (($page - 1) * 100) -First 100)
@@ -734,6 +820,18 @@ function Invoke-FakeGitHub {
                 $items = @($Api.runs | Where-Object { $_.id -eq [long]$Matches[1] })
                 if ($items.Count -ne 1) { throw 'unexpected_fake_request: run ID' }
                 $value = $items[0]
+            }
+            elseif ($route -cmatch "^$escapedRoot/actions/runs/([1-9][0-9]*)/attempts/([1-9][0-9]*)(/jobs)?$") {
+                $key = $Matches[1] + '/' + $Matches[2]
+                if ($Matches[3] -ceq '/jobs') {
+                    if ($query.Count -ne 2 -or $query.per_page -cne '100' -or $query.page -cne '1' -or
+                        -not $Api.jobs.ContainsKey($key)) { throw 'unexpected_fake_request: attempt jobs' }
+                    $value = $Api.jobs[$key]
+                }
+                else {
+                    if ($query.Count -ne 0 -or -not $Api.attempts.ContainsKey($key)) { throw 'unexpected_fake_request: attempt' }
+                    $value = $Api.attempts[$key]
+                }
             }
             elseif ($route -ceq "$root/actions/workflows/backport-demo.yml/runs") {
                 if ($query.Count -ne 2 -or -not $query.ContainsKey('per_page') -or -not $query.ContainsKey('page')) {
