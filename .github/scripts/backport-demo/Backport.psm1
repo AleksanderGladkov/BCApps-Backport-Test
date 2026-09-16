@@ -274,11 +274,74 @@ function Get-BackportToken {
     $token
 }
 
+function Get-BackportRequest {
+    param($Environment, $Actor, $Allowed)
+    $sender = $null
+    $dry = $Environment['INPUT_DRY_RUN']
+    if (-not (Test-BackportLiteral $dry @('true', 'false'))) { throw 'invalid_dry_run' }
+    $source = ConvertTo-BackportPositive $Environment['INPUT_SOURCE_PR'] 2147483648
+    $eventName = $Environment['GITHUB_EVENT_NAME']
+    if (-not (Test-BackportLiteral $eventName @('workflow_dispatch', 'pull_request_target'))) { throw 'unsupported_event' }
+    $path = $Environment['GITHUB_EVENT_PATH']
+    if (-not $path) { throw 'invalid_event_file' }
+    try {
+        Assert-BackportRegularFile $path
+        $stream = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+        try {
+            if ($stream.Length -gt 5MB) { throw 'invalid_event_file' }
+            $bytes = [byte[]]::new([int]$stream.Length)
+            $stream.ReadExactly($bytes, 0, $bytes.Length)
+        }
+        finally { $stream.Dispose() }
+        $event = ConvertFrom-BackportJsonBytes $bytes
+    }
+    catch [IO.IOException] { throw 'invalid_event_file' }
+    catch [UnauthorizedAccessException] { throw 'invalid_event_file' }
+    Assert-BackportRepository (Get-BackportField $event 'repository')
+    if (Test-BackportLiteral $eventName @('workflow_dispatch')) {
+        if (-not (Test-BackportLiteral (Get-BackportField $event 'ref') @('main', 'refs/heads/main'))) {
+            throw 'wrong_execution_ref'
+        }
+        $inputs = Get-BackportObjectField $event 'inputs'
+        $requestSource = ConvertTo-BackportPositive (Get-BackportField $inputs 'source_pr') 2147483648
+        $requestDry = Get-BackportField $inputs 'dry_run'
+        if (-not (Test-BackportLiteral $requestDry @('true', 'false'))) { throw 'invalid_dry_run' }
+    }
+    else {
+        if (-not (Test-BackportLiteral (Get-BackportField $event 'action') @('labeled')) -or
+            -not (Test-BackportLiteral (Get-BackportField (Get-BackportObjectField $event 'label') 'name') @('backport:29.x'))) {
+            throw 'invalid_label_event'
+        }
+        $pr = Get-BackportObjectField $event 'pull_request'
+        $requestSource = Get-BackportField $pr 'number'
+        $number = Get-BackportField $event 'number'
+        if (-not (Test-BackportInteger $requestSource) -or $requestSource -le 0 -or $requestSource -ge 2147483648 -or
+            -not (Test-BackportInteger $number) -or $number -ne $requestSource) { throw 'invalid_number' }
+        # Admission uses the original snapshot, never a later merge observed through the API.
+        $merged = Get-BackportField $pr 'merged'
+        if ($merged -isnot [bool] -or -not $merged -or
+            -not (Test-BackportLiteral (Get-BackportField $pr 'state') @('closed'))) { throw 'source_not_merged' }
+        $base = Get-BackportObjectField $pr 'base'
+        Assert-BackportRepository (Get-BackportField $base 'repo')
+        if (-not (Test-BackportLiteral (Get-BackportField $base 'ref') @('main'))) { throw 'source_wrong_base' }
+        $sender = Get-BackportField (Get-BackportObjectField $event 'sender') 'id'
+        if (-not (Test-BackportInteger $sender) -or $sender -le 0 -or $sender -ne $Actor -or
+            $Allowed -notcontains $sender) { throw 'sender_not_allowed' }
+        $requestDry = 'false'
+    }
+    if ($requestSource -ne $source -or -not (Test-BackportLiteral $dry @($requestDry))) { throw 'request_projection_mismatch' }
+    return @{
+        source_pr = [int]$requestSource; dry_run = (Test-BackportLiteral $requestDry @('true'))
+        event_name = $eventName; sender_id = $sender
+    }
+}
+
 function New-BackportContext {
     param([AllowNull()][Collections.IDictionary]$Environment = $null)
     $envMap = New-BackportDictionary
     foreach ($key in @('GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_ID', 'GITHUB_REF', 'GITHUB_ACTOR_ID',
         'GITHUB_TRIGGERING_ACTOR', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'INPUT_SOURCE_PR', 'INPUT_DRY_RUN',
+        'GITHUB_EVENT_NAME', 'GITHUB_EVENT_PATH', 'GITHUB_WORKFLOW_REF', 'GITHUB_WORKFLOW_SHA',
         'ALLOWED_ACTOR_IDS', 'RUNNER_TEMP', 'STATE_DIR', 'WORK_DIR', 'GITHUB_OUTPUT', 'GITHUB_STEP_SUMMARY', 'GITHUB_SUMMARY')) {
         $value = if ($null -eq $Environment) { [Environment]::GetEnvironmentVariable($key) } else { $Environment[$key] }
         if ($null -ne $value) { $envMap.Add($key, [string]$value) }
@@ -286,6 +349,10 @@ function New-BackportContext {
     if (-not (Test-BackportLiteral $envMap['GITHUB_REPOSITORY'] @('AleksanderGladkov/BCApps-Backport-Test'))) { throw 'wrong_repository' }
     if (-not (Test-BackportLiteral $envMap['GITHUB_REPOSITORY_ID'] @('1369849596'))) { throw 'wrong_repository_id' }
     if (-not (Test-BackportLiteral $envMap['GITHUB_REF'] @('refs/heads/main'))) { throw 'wrong_execution_ref' }
+    if (-not (Test-BackportLiteral $envMap['GITHUB_WORKFLOW_REF'] @(
+        'AleksanderGladkov/BCApps-Backport-Test/.github/workflows/backport-demo.yml@refs/heads/main'
+    ))) { throw 'wrong_workflow_ref' }
+    $null = Assert-BackportSha $envMap['GITHUB_WORKFLOW_SHA']
     $rawAllowed = if ($envMap.ContainsKey('ALLOWED_ACTOR_IDS')) { $envMap['ALLOWED_ACTOR_IDS'] } else { '59250993' }
     $allowed = @($rawAllowed.Split(',') | ForEach-Object { ConvertTo-BackportPositive $_ })
     $actor = ConvertTo-BackportPositive $envMap['GITHUB_ACTOR_ID']
@@ -294,9 +361,7 @@ function New-BackportContext {
     if (-not $triggering -or -not [regex]::IsMatch($triggering, '\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\z')) {
         throw 'invalid_triggering_actor'
     }
-    $dry = $envMap['INPUT_DRY_RUN']
-    if (-not (Test-BackportLiteral $dry @('true', 'false'))) { throw 'invalid_dry_run' }
-    $source = ConvertTo-BackportPositive $envMap['INPUT_SOURCE_PR'] 2147483648
+    $request = Get-BackportRequest $envMap $actor $allowed
     $run = $envMap['GITHUB_RUN_ID']; $attempt = $envMap['GITHUB_RUN_ATTEMPT']
     $null = ConvertTo-BackportPositive $run
     $null = ConvertTo-BackportPositive $attempt
@@ -305,7 +370,7 @@ function New-BackportContext {
     $state = Resolve-BackportLocalPath $(if ($envMap['STATE_DIR']) { $envMap['STATE_DIR'] } else { [IO.Path]::Combine($temp, 'backport-state') })
     $work = Resolve-BackportLocalPath $(if ($envMap['WORK_DIR']) { $envMap['WORK_DIR'] } else { [IO.Path]::Combine($temp, 'backport-work') })
     if ((Test-BackportContainedPath $state $work) -or (Test-BackportContainedPath $work $state)) { throw 'overlapping_directories' }
-    $trusted = @('Backport.psm1','Invoke-Backport.ps1','compat.json') | ForEach-Object {
+    $trusted = @('Backport.psm1','Invoke-Backport.ps1','compat.json','request-policy.json') | ForEach-Object {
         Resolve-BackportLocalPath ([IO.Path]::Combine($PSScriptRoot, $_))
     }
     foreach ($path in $trusted) {
@@ -333,12 +398,101 @@ function New-BackportContext {
     $null = Get-BackportToken -Environment $Environment
     $config = New-BackportDictionary
     foreach ($entry in @{
-        source_pr = [int]$source; dry_run = (Test-BackportLiteral $dry @('true')); actor_id = $actor
+        source_pr = $request.source_pr; dry_run = $request.dry_run; actor_id = $actor
+        event_name = $request.event_name; sender_id = $request.sender_id
         triggering_actor = $triggering; allowed_actor_ids = $allowed; run_id = $run
         run_attempt = $attempt; state_dir = $state; work_dir = $work
         output = $outputs[0]; summary = $outputs[1]
     }.GetEnumerator()) { $config.Add($entry.Key, $entry.Value) }
     return ,$config
+}
+
+function Read-BackportTrustedPolicyBytes {
+    $path = [IO.Path]::Combine($PSScriptRoot, 'request-policy.json')
+    try {
+        if (-not [IO.File]::Exists($path)) { throw 'request_policy_unavailable' }
+        Assert-BackportRegularFile $path
+        $stream = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+        try {
+            if ($stream.Length -gt 5MB) { throw 'request_policy_invalid' }
+            $bytes = [byte[]]::new([int]$stream.Length)
+            $stream.ReadExactly($bytes, 0, $bytes.Length)
+        }
+        finally { $stream.Dispose() }
+    }
+    catch [IO.IOException] { throw 'request_policy_unavailable' }
+    catch [UnauthorizedAccessException] { throw 'request_policy_unavailable' }
+    return ,$bytes
+}
+
+function ConvertFrom-BackportPolicyBytes {
+    param([byte[]]$Bytes)
+    if ($null -eq $Bytes -or $Bytes.Length -eq 0 -or $Bytes.Length -gt 5MB) { throw 'request_policy_invalid' }
+    $policy = ConvertFrom-BackportJsonBytes $Bytes
+    $keys = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+    foreach ($key in @('schema','repository_id','allowed_actor_ids','label_requests_enabled','writes_enabled')) {
+        $null = $keys.Add($key)
+    }
+    if ($policy -isnot [Collections.IDictionary] -or -not $keys.SetEquals([string[]]@($policy.psbase.Keys)) -or
+        -not (Test-BackportInteger $policy['schema']) -or $policy['schema'] -ne 1 -or
+        -not (Test-BackportInteger $policy['repository_id']) -or $policy['repository_id'] -ne 1369849596 -or
+        $policy['label_requests_enabled'] -isnot [bool] -or $policy['writes_enabled'] -isnot [bool] -or
+        $policy['allowed_actor_ids'] -isnot [array] -or $policy['allowed_actor_ids'].Count -eq 0) {
+        throw 'request_policy_invalid'
+    }
+    $ids = [Collections.Generic.HashSet[Numerics.BigInteger]]::new()
+    foreach ($id in $policy['allowed_actor_ids']) {
+        if (-not (Test-BackportInteger $id) -or $id -le 0 -or -not $ids.Add($id)) { throw 'request_policy_invalid' }
+    }
+    return ,$policy
+}
+
+function Assert-BackportRequestPolicy {
+    param($Config)
+    $trustedBytes = Read-BackportTrustedPolicyBytes
+    $trusted = ConvertFrom-BackportPolicyBytes $trustedBytes
+    $root = '/repos/AleksanderGladkov/BCApps-Backport-Test'
+    $ref = Invoke-BackportHttp -Config $Config -Method GET -Path ($root + '/git/ref/heads/main')
+    if (-not (Test-BackportLiteral (Get-BackportField $ref 'ref') @('refs/heads/main')) -or
+        -not (Test-BackportLiteral (Get-BackportField (Get-BackportObjectField $ref 'object') 'type') @('commit'))) {
+        throw 'request_policy_invalid'
+    }
+    $revision = Assert-BackportSha (Get-BackportField (Get-BackportObjectField $ref 'object') 'sha')
+    $path = '.github/scripts/backport-demo/request-policy.json'
+    $file = Invoke-BackportHttp -Config $Config -Method GET -Path ($root + '/contents/' + $path + '?ref=' + $revision)
+    $content = Get-BackportField $file 'content'
+    $size = Get-BackportField $file 'size'
+    if (-not (Test-BackportLiteral (Get-BackportField $file 'type') @('file')) -or
+        -not (Test-BackportLiteral (Get-BackportField $file 'path') @($path)) -or
+        -not (Test-BackportLiteral (Get-BackportField $file 'encoding') @('base64')) -or
+        $content -isnot [string] -or $content.Length -gt 8MB -or
+        -not (Test-BackportInteger $size) -or $size -le 0 -or $size -gt 5MB) { throw 'request_policy_invalid' }
+    try { $bytes = [Convert]::FromBase64String($content) }
+    catch [FormatException] { throw 'request_policy_invalid' }
+    if ($bytes.Length -ne $size) { throw 'request_policy_invalid' }
+    $current = ConvertFrom-BackportPolicyBytes $bytes
+    $digest = Get-BackportHash $trustedBytes
+    if (-not (Test-BackportLiteral (Get-BackportHash $bytes) @($digest))) { throw 'request_policy_changed' }
+    $label = Test-BackportLiteral $Config.event_name @('pull_request_target')
+    if (-not (Test-BackportLiteral $Config.event_name @('workflow_dispatch','pull_request_target'))) { throw 'request_policy_invalid' }
+    $actors = @($Config.actor_id, (Get-BackportField $Config 'triggering_actor_id'))
+    if ($label) {
+        if (-not (Test-BackportInteger $Config.sender_id) -or $Config.sender_id -ne $Config.actor_id -or $Config.dry_run) {
+            throw 'request_policy_actor_not_allowed'
+        }
+        $actors += $Config.sender_id
+    }
+    foreach ($policy in @($trusted, $current)) {
+        foreach ($actor in $actors) {
+            if (-not (Test-BackportInteger $actor) -or $actor -le 0 -or
+                $Config.allowed_actor_ids -notcontains $actor -or $policy['allowed_actor_ids'] -notcontains $actor) {
+                throw 'request_policy_actor_not_allowed'
+            }
+        }
+        if ($label -and -not $policy['label_requests_enabled']) { throw 'request_policy_labels_disabled' }
+        if (-not $Config.dry_run -and -not $policy['writes_enabled']) { throw 'request_policy_writes_disabled' }
+    }
+    Write-Host "request_policy: main=$revision sha256=$digest"
 }
 
 function Get-BackportBinding {
@@ -1383,6 +1537,7 @@ function Invoke-BackportPush {
     param($Config, [string]$Directory)
     if ($Config.dry_run) { throw 'dry_run_write_blocked' }
     $ref = 'refs/heads/' + (Get-BackportBranch $Config)
+    Assert-BackportRequestPolicy $Config
     $null = Invoke-BackportGit -Config $Config -Directory $Directory -Auth -Arguments @(
         'push','--porcelain','https://github.com/AleksanderGladkov/BCApps-Backport-Test.git',
         ('--force-with-lease=' + $ref + ':'),('HEAD:' + $ref)
@@ -1415,24 +1570,139 @@ function Assert-BackportRepository {
 }
 
 function Get-BackportRunIdentity {
-    param([AllowNull()]$Run)
+    param([AllowNull()]$Run, [switch]$AllowRejectedLabel)
     if ($Run -isnot [Collections.IDictionary]) { throw 'invalid_run_history' }
     foreach ($key in @('id','workflow_id','run_attempt')) {
         $value = Get-BackportField $Run $key
         if (-not (Test-BackportInteger $value) -or $value -le 0) { throw 'invalid_run_history' }
     }
     Assert-BackportRepository (Get-BackportField $Run 'repository')
-    Assert-BackportRepository (Get-BackportField $Run 'head_repository')
+    $event = Get-BackportField $Run 'event'
+    $label = Test-BackportLiteral $event @('pull_request_target')
     if (-not (Test-BackportLiteral (Get-BackportField $Run 'path') @('.github/workflows/backport-demo.yml')) -or
-        -not (Test-BackportLiteral (Get-BackportField $Run 'event') @('workflow_dispatch')) -or
-        -not (Test-BackportLiteral (Get-BackportField $Run 'head_branch') @('main'))) { throw 'unknown_run_history' }
+        -not (Test-BackportLiteral $event @('workflow_dispatch','pull_request_target'))) { throw 'unknown_run_history' }
+    $branch = Get-BackportField $Run 'head_branch'
+    if (-not $label) {
+        Assert-BackportRepository (Get-BackportField $Run 'head_repository')
+        if (-not (Test-BackportLiteral $branch @('main'))) { throw 'unknown_run_history' }
+    }
+    else {
+        # REST run heads describe event data, not the trusted automation checkout.
+        $null = Assert-BackportSha (Get-BackportField $Run 'head_sha')
+        $headRepo = Get-BackportObjectField $Run 'head_repository'
+        $headId = Get-BackportField $headRepo 'id'
+        $headName = Get-BackportField $headRepo 'full_name'
+        if ($branch -isnot [string] -or -not $branch -or
+            -not (Test-BackportInteger $headId) -or $headId -le 0 -or
+            $headName -isnot [string] -or -not [regex]::IsMatch($headName, '\A[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+\z')) {
+            throw 'unknown_run_history'
+        }
+        if ($headId -eq 1369849596 -or (Test-BackportLiteral $headName @('AleksanderGladkov/BCApps-Backport-Test'))) {
+            Assert-BackportRepository $headRepo
+        }
+    }
     $title = Get-BackportField $Run 'display_title'
     if ($title -isnot [string]) { throw 'unknown_run_history' }
     $match = [regex]::Match($title, '\ABackport PR ([1-9][0-9]{0,9}) to 29\.x \(dry run = (true|false)\)\z')
-    if (-not $match.Success) { throw 'unknown_run_history' }
-    return @{
-        source_pr = ConvertTo-BackportPositive $match.Groups[1].Value 2147483648
-        dry_run = Test-BackportLiteral $match.Groups[2].Value @('true')
+    $source = $null; $dry = $false
+    if ($match.Success) {
+        $number = ConvertTo-BackportPositive $match.Groups[1].Value
+        $dry = Test-BackportLiteral $match.Groups[2].Value @('true')
+        if ($number -lt 2147483648 -and (-not $label -or -not $dry)) { $source = $number }
+    }
+    if ($null -eq $source -and (-not $label -or -not $AllowRejectedLabel)) { throw 'unknown_run_history' }
+    if ($label) {
+        $dry = $false
+        $pulls = Get-BackportField $Run 'pull_requests'
+        if ($pulls -isnot [array] -or $pulls.Count -gt 1) { throw 'unknown_run_history' }
+        if ($pulls.Count -eq 1) {
+            $pr = $pulls[0]
+            $number = Get-BackportField $pr 'number'
+            $base = Get-BackportObjectField $pr 'base'
+            $baseId = Get-BackportField (Get-BackportObjectField $base 'repo') 'id'
+            $head = Get-BackportObjectField $pr 'head'
+            $headRef = Get-BackportField $head 'ref'
+            if (-not (Test-BackportInteger $number) -or $number -le 0 -or $number -ge 2147483648 -or
+                ($null -ne $source -and $number -ne $source) -or
+                -not (Test-BackportInteger $baseId) -or $baseId -ne 1369849596 -or
+                -not (Test-BackportLiteral (Get-BackportField $base 'ref') @('main')) -or
+                $headRef -isnot [string] -or -not $headRef -or
+                -not (Test-BackportLiteral $branch @('main', $headRef))) { throw 'unknown_run_history' }
+        }
+    }
+    return @{ source_pr = $source; dry_run = $dry }
+}
+
+function Assert-BackportRejectedLabelRun {
+    param($Config, $Run)
+    $terminal = @('success','failure','neutral','cancelled','skipped','timed_out','action_required','stale')
+    if (-not (Test-BackportLiteral $Run['event'] @('pull_request_target')) -or
+        -not (Test-BackportLiteral (Get-BackportField $Run 'status') @('completed')) -or
+        -not (Test-BackportLiteral (Get-BackportField $Run 'conclusion') $terminal) -or
+        $Run['run_attempt'] -gt 100) { throw 'previous_run_may_have_written' }
+    $root = '/repos/AleksanderGladkov/BCApps-Backport-Test/actions/runs/' + $Run['id']
+    $jobIds = [Collections.Generic.HashSet[Numerics.BigInteger]]::new()
+    for ($number = 1; $number -le $Run['run_attempt']; $number++) {
+        $attempt = Invoke-BackportHttp -Config $Config -Method GET -Path ($root + '/attempts/' + $number)
+        $null = Get-BackportRunIdentity $attempt -AllowRejectedLabel
+        if ($attempt['id'] -ne $Run['id'] -or $attempt['workflow_id'] -ne $Run['workflow_id'] -or
+            $attempt['run_attempt'] -ne $number -or
+            -not (Test-BackportLiteral $attempt['event'] @('pull_request_target')) -or
+            -not (Test-BackportLiteral (Get-BackportField $attempt 'status') @('completed')) -or
+            -not (Test-BackportLiteral (Get-BackportField $attempt 'conclusion') $terminal)) { throw 'previous_run_may_have_written' }
+        foreach ($field in @('display_title','head_branch','head_sha')) {
+            if (-not (Test-BackportLiteral $attempt[$field] @($Run[$field]))) { throw 'run_history_changed' }
+        }
+        # The only accepted inventory fits on one page; larger or partial layouts cannot prove non-writing.
+        $page = Invoke-BackportHttp -Config $Config -Method GET -Path ($root + '/attempts/' + $number + '/jobs?per_page=100&page=1')
+        $count = Get-BackportField $page 'total_count'
+        $jobs = Get-BackportField $page 'jobs'
+        if (-not (Test-BackportInteger $count) -or $count -ne 4 -or $jobs -isnot [array] -or $jobs.Count -ne 4) {
+            throw 'incomplete_run_history'
+        }
+        $names = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+        foreach ($job in $jobs) {
+            foreach ($field in @('id','run_id','run_attempt')) {
+                $value = Get-BackportField $job $field
+                if (-not (Test-BackportInteger $value) -or $value -le 0) { throw 'invalid_run_history' }
+            }
+            $name = Get-BackportField $job 'name'
+            $steps = Get-BackportField $job 'steps'
+            $conclusion = Get-BackportField $job 'conclusion'
+            if ($job['run_id'] -ne $Run['id'] -or $job['run_attempt'] -ne $number -or
+                -not $jobIds.Add($job['id']) -or
+                -not (Test-BackportLiteral $name @('validate','track','prepare','publish')) -or -not $names.Add($name) -or
+                -not (Test-BackportLiteral (Get-BackportField $job 'status') @('completed')) -or
+                -not (Test-BackportLiteral (Get-BackportField $job 'workflow_name') @($attempt['display_title'])) -or
+                -not (Test-BackportLiteral (Get-BackportField $job 'head_sha') @($attempt['head_sha'])) -or
+                -not (Test-BackportLiteral (Get-BackportField $job 'head_branch') @($attempt['head_branch'])) -or
+                $steps -isnot [array]) { throw 'invalid_run_history' }
+            if (Test-BackportLiteral $name @('validate')) {
+                if (-not (Test-BackportLiteral $conclusion @('failure','cancelled','skipped','timed_out','action_required'))) {
+                    throw 'previous_run_may_have_written'
+                }
+                $stepNumbers = [Collections.Generic.HashSet[Numerics.BigInteger]]::new()
+                $stepNames = [Collections.Generic.HashSet[string]]::new([StringComparer]::Ordinal)
+                foreach ($step in $steps) {
+                    $stepNumber = Get-BackportField $step 'number'
+                    $stepName = Get-BackportField $step 'name'
+                    if (-not (Test-BackportInteger $stepNumber) -or $stepNumber -le 0 -or -not $stepNumbers.Add($stepNumber) -or
+                        $stepName -isnot [string] -or -not $stepName -or -not $stepNames.Add($stepName) -or
+                        -not (Test-BackportLiteral (Get-BackportField $step 'status') @('completed')) -or
+                        -not (Test-BackportLiteral (Get-BackportField $step 'conclusion') $terminal)) { throw 'incomplete_run_history' }
+                }
+            }
+            elseif (-not (Test-BackportLiteral $conclusion @('skipped'))) { throw 'previous_run_may_have_written' }
+            if ((Test-BackportLiteral $conclusion @('skipped')) -and $steps.Count -ne 0) { throw 'previous_run_may_have_written' }
+        }
+    }
+    $latest = Invoke-BackportHttp -Config $Config -Method GET -Path $root
+    $null = Get-BackportRunIdentity $latest -AllowRejectedLabel
+    foreach ($field in @('id','workflow_id','run_attempt')) {
+        if ($latest[$field] -ne $Run[$field]) { throw 'run_history_changed' }
+    }
+    foreach ($field in @('event','display_title','head_branch','head_sha','status','conclusion')) {
+        if (-not (Test-BackportLiteral (Get-BackportField $latest $field) @($Run[$field]))) { throw 'run_history_changed' }
     }
 }
 
@@ -1444,6 +1714,7 @@ function Assert-BackportFreshCreation {
     )
     $identity = Get-BackportRunIdentity $current
     if ($identity.source_pr -ne $Config.source_pr -or $identity.dry_run -ne $Config.dry_run -or
+        -not (Test-BackportLiteral $current['event'] @($Config.event_name)) -or
         $current['id'] -ne (ConvertTo-BackportPositive $Config.run_id) -or
         $current['run_attempt'] -ne (ConvertTo-BackportPositive $Config.run_attempt)) { throw 'current_run_mismatch' }
     if ($current['run_attempt'] -ne 1) { throw 'previous_run_may_have_written' }
@@ -1466,14 +1737,17 @@ function Assert-BackportFreshCreation {
         if ($count -ne $total) { throw 'run_history_changed' }
         if ($runs.Count -ne [Math]::Min(100, [int]$total - $seen.Count)) { throw 'incomplete_run_history' }
         foreach ($run in $runs) {
-            $identity = Get-BackportRunIdentity $run
+            $identity = Get-BackportRunIdentity $run -AllowRejectedLabel
             if ($run['workflow_id'] -ne $current['workflow_id']) { throw 'wrong_history_workflow' }
             if (-not $seen.Add([Numerics.BigInteger]$run['id'])) { throw 'duplicate_run_history' }
             if ($run['id'] -eq $current['id']) {
                 if ($run['run_attempt'] -ne $current['run_attempt'] -or
+                    -not (Test-BackportLiteral $run['event'] @($current['event'])) -or
                     -not (Test-BackportLiteral $run['display_title'] @($current['display_title']))) { throw 'current_run_mismatch' }
             }
-            elseif ($identity.source_pr -eq $Config.source_pr -and -not $identity.dry_run) { throw 'previous_run_may_have_written' }
+            elseif (($null -eq $identity.source_pr -or $identity.source_pr -eq $Config.source_pr) -and -not $identity.dry_run) {
+                Assert-BackportRejectedLabelRun -Config $Config -Run $run
+            }
         }
         if ($seen.Count -eq $total) {
             if (-not $seen.Contains([Numerics.BigInteger]$current['id'])) { throw 'current_run_missing_from_history' }
@@ -1509,6 +1783,8 @@ function Get-BackportRemoteContext {
     if (-not (Test-BackportLiteral (ConvertTo-BackportCaseFold $folded) @((ConvertTo-BackportCaseFold $Config.triggering_actor)))) {
         throw 'triggering_actor_mismatch'
     }
+    $Config['triggering_actor_id'] = $id
+    Assert-BackportRequestPolicy $Config
     $source = Invoke-BackportHttp -Config $Config -Method GET -Path ('/repos/AleksanderGladkov/BCApps-Backport-Test/pulls/' + $Config.source_pr)
     $merged = Get-BackportField $source 'merged'
     if (-not (Test-BackportNumberEqual (Get-BackportField $source 'number') $Config.source_pr) -or
@@ -1690,6 +1966,7 @@ function Read-BackportTracking {
     if (-not (Test-BackportNumberEqual $issue['id'] $value['issue_id']) -or
         -not (Test-BackportLiteral $value['issue_url'] @($issue['html_url']))) { throw 'tracking_issue_mismatch' }
     if (Test-BackportLiteral $issue['state'] @('closed')) { Assert-BackportExistingPrProof -Config $Config -Plan $Plan -Issue $issue -Source $Source }
+    Assert-BackportRequestPolicy $Config
     return ,$value
 }
 
@@ -1824,6 +2101,7 @@ function Invoke-BackportTrack {
         Assert-BackportFreshCreation $Config
         $state['status'] = 'ambiguous'
         Write-BackportState $Config 'tracking.json' $state
+        Assert-BackportRequestPolicy $Config
         $issue = Invoke-BackportHttp -Config $Config -Method POST -Path '/repos/AleksanderGladkov/BCApps-Backport-Test/issues' -Data @{
             title = "[29.x] Backport #$($Config.source_pr)"; body = Get-BackportIssueBody $Config $plan
         }
@@ -1837,6 +2115,7 @@ function Invoke-BackportTrack {
     $state['status'] = 'tracked'
     $state['issue_number'] = $issue['number']; $state['issue_id'] = $issue['id']; $state['issue_url'] = $issue['html_url']
     Write-BackportState $Config 'tracking.json' $state
+    Assert-BackportRequestPolicy $Config
     Write-BackportOutput -Config $Config -Values @{ issue_number = [string]$issue['number'] }
     Write-BackportSummary -Config $Config -Status 'tracked' -Plan $plan
     return ,$state
@@ -1939,6 +2218,7 @@ function Invoke-BackportWriteOnce {
     if (Test-BackportLiteral $Method @('POST')) { Assert-BackportFreshCreation $Config }
     $journal['attempted'] = [object[]]@($journal['attempted']) + [object[]]@($Key)
     Write-BackportState $Config 'publication.json' $journal
+    Assert-BackportRequestPolicy $Config
     return ,(Invoke-BackportHttp -Config $Config -Method $Method -Path $Path -Data $Data)
 }
 
@@ -1966,7 +2246,10 @@ function Invoke-BackportFeedback {
             $comment = $matches[0]
             $id = Get-BackportField $comment 'id'
             if (-not (Test-BackportInteger $id) -or $id -le 0) { throw 'invalid_comment_id' }
-            if (Test-BackportLiteral (Get-BackportField $comment 'body') @($body)) { continue }
+            if (Test-BackportLiteral (Get-BackportField $comment 'body') @($body)) {
+                Assert-BackportRequestPolicy $Config
+                continue
+            }
             $path = '/repos/AleksanderGladkov/BCApps-Backport-Test/issues/comments/' + $id
             $method = 'PATCH'
         }
@@ -1980,12 +2263,15 @@ function Invoke-BackportFeedback {
         $value = Invoke-BackportWriteOnce -Config $Config -Plan $Plan -Key $key -Method $method -Path $path -Data @{body=$body}
         Assert-BackportBot $value
         if (-not (Test-BackportLiteral (Get-BackportField $value 'body') @($body))) { throw 'comment_readback_mismatch' }
+        Assert-BackportRequestPolicy $Config
     }
 }
 
 function Complete-BackportStage {
     param($Config, $Plan, $Tracking, [string]$Status, [string]$PrUrl = '', [string]$Reason = '')
+    Assert-BackportRequestPolicy $Config
     if (-not $Config.dry_run) { Invoke-BackportFeedback -Config $Config -Plan $Plan -Tracking $Tracking -Status $Status -PrUrl $PrUrl -Reason $Reason }
+    Assert-BackportRequestPolicy $Config
     $values = [ordered]@{status=$Status}
     if ($PrUrl) { $values['pr_url'] = $PrUrl }
     Write-BackportOutput -Config $Config -Values $values
@@ -2021,7 +2307,10 @@ function Invoke-BackportPublish {
         }
         $candidates = Get-BackportPulls $Config
         $head = Get-BackportBranchHead -Config $Config -Directory $directory
-        if ($null -ne $head) { Assert-BackportBranch -Config $Config -Directory $directory -Head $head -Plan $plan -Tree $result['tree_sha'] }
+        if ($null -ne $head) {
+            Assert-BackportBranch -Config $Config -Directory $directory -Head $head -Plan $plan -Tree $result['tree_sha']
+            Assert-BackportRequestPolicy $Config
+        }
         if ($candidates.Count -gt 0) {
             if ($null -eq $head) { throw 'existing_pr_branch_missing' }
             $value = Invoke-BackportHttp -Config $Config -Method GET -Path (
@@ -2045,6 +2334,7 @@ function Invoke-BackportPublish {
             $head = Get-BackportBranchHead -Config $Config -Directory $directory
             if (-not (Test-BackportLiteral $head @($computed['commit_sha']))) { throw 'push_readback_mismatch' }
             Assert-BackportBranch -Config $Config -Directory $directory -Head $head -Plan $plan -Tree $result['tree_sha']
+            Assert-BackportRequestPolicy $Config
         }
         $current = Get-BackportRemoteContext $Config $plan
         if (-not (Test-BackportLiteral $current.target @($plan['target_base_sha']))) {
@@ -2067,6 +2357,9 @@ function Get-BackportSafeReason {
     param([string]$Reason)
     $allowed = @(
         'invalid_stage','wrong_repository','wrong_repository_id','wrong_execution_ref','invalid_number',
+        'wrong_workflow_ref','unsupported_event','invalid_event_file','invalid_label_event','sender_not_allowed','request_projection_mismatch',
+        'request_policy_invalid','request_policy_unavailable','request_policy_changed','request_policy_actor_not_allowed',
+        'request_policy_labels_disabled','request_policy_writes_disabled',
         'actor_not_allowed','invalid_triggering_actor','invalid_dry_run','missing_local_directories',
         'invalid_local_path','overlapping_directories','script_inside_work_directory','invalid_output_path',
         'missing_or_invalid_token','invalid_compatibility_data','invalid_artifact','duplicate_json_key',

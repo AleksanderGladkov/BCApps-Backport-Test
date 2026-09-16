@@ -1,7 +1,10 @@
 name: Backport to 29.x
-run-name: Backport PR ${{ inputs.source_pr }} to 29.x (dry run = ${{ inputs.dry_run }})
+run-name: Backport PR ${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || inputs.source_pr }} to 29.x (dry run = ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && 'true' || 'false' }})
 
 on:
+  pull_request_target:
+    types: [labeled]
+    branches: [main]
   workflow_dispatch:
     inputs:
       source_pr:
@@ -17,12 +20,12 @@ on:
 permissions: {}
 
 concurrency:
-  group: backport-demo-${{ github.repository_id }}-${{ inputs.source_pr }}-29
+  group: backport-demo-${{ github.repository_id }}-${{ (github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request_target' && github.event.action == 'labeled' && github.event.label.name == 'backport:29.x' && github.event.pull_request.merged == true && github.event.pull_request.state == 'closed' && github.event.pull_request.base.ref == 'main' && github.event.repository.id == 1369849596 && github.event.repository.full_name == 'AleksanderGladkov/BCApps-Backport-Test' && github.event.pull_request.base.repo.id == 1369849596 && github.event.pull_request.base.repo.full_name == 'AleksanderGladkov/BCApps-Backport-Test' && github.event.number == github.event.pull_request.number && github.event.number > 0 && github.event.number < 2147483648)) && (github.event_name == 'pull_request_target' && github.event.pull_request.number || inputs.source_pr) || format('rejected-{0}', github.run_id) }}-29
   cancel-in-progress: false
 
 env:
-  INPUT_SOURCE_PR: ${{ inputs.source_pr }}
-  INPUT_DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}
+  INPUT_SOURCE_PR: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.number || inputs.source_pr }}
+  INPUT_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && 'true' || 'false' }}
   ALLOWED_ACTOR_IDS: ${{ vars.BACKPORT_ALLOWED_ACTOR_IDS || '59250993' }}
 
 defaults:
@@ -31,6 +34,8 @@ defaults:
 
 jobs:
   validate:
+    outputs:
+      plan_ready: ${{ steps.validate.outputs.plan_ready }}
     if: github.repository == 'AleksanderGladkov/BCApps-Backport-Test' && github.repository_id == '1369849596' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -40,7 +45,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
           sparse-checkout: .github/scripts/backport-demo
       - name: Check PowerShell runtime
@@ -49,6 +54,7 @@ jobs:
             throw 'PowerShell 7.4+ and .NET 8+ are required.'
           }
       - name: Validate requester, source history and target
+        id: validate
         env:
           GH_TOKEN: ${{ github.token }}
         run: ./.github/scripts/backport-demo/Invoke-Backport.ps1 -Stage validate
@@ -62,6 +68,7 @@ jobs:
 
   track:
     needs: validate
+    if: needs.validate.outputs.plan_ready == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 15
     permissions:
@@ -72,7 +79,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
           sparse-checkout: .github/scripts/backport-demo
       - name: Check PowerShell runtime
@@ -107,7 +114,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
           sparse-checkout: .github/scripts/backport-demo
       - name: Check PowerShell runtime
@@ -147,7 +154,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.workflow_sha }}
           persist-credentials: false
           sparse-checkout: .github/scripts/backport-demo
       - name: Check PowerShell runtime
