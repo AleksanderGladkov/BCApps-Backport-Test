@@ -153,9 +153,11 @@ runs can be replaced. **Removing the label is not cancellation**; the original
 request may continue. Use reviewed live-policy withdrawal or explicit Actions
 cancellation to stop subsequent work, subject to the race limitations below.
 
-New backport PR titles use `[29.x] <source PR title>`, removing `[main]` and
+New tracking Issues use `[29.x] <source PR title>`, removing `[main]` and
 `[master]` tags and their following space without changing other title text.
-Existing backport PRs keep their titles when reused. PR descriptions remain
+The new backport PR takes the tracking Issue's title, so editing the source title
+between jobs does not give the Issue and PR different titles. Existing Issues and
+backport PRs keep their titles when reused. PR descriptions remain
 `Backport of #<source>` and `Fixes #<tracking issue>` with the existing provenance;
 the source PR description is not copied. Branch names remain
 `backport/29.x/pr-<source PR>`. The source number is also stored in the plan and

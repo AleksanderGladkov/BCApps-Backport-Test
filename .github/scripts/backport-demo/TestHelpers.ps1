@@ -492,14 +492,18 @@ function ConvertTo-StageComments {
 }
 
 function ConvertTo-BackportReferenceBytes {
-    param([AllowNull()]$Value, [switch]$IgnorePrTitles)
-    if ($IgnorePrTitles) {
+    param([AllowNull()]$Value, [switch]$IgnoreDisplayTitles)
+    if ($IgnoreDisplayTitles) {
         $Value = Copy-BackportTestValue $Value
         $api = if ($Value.ContainsKey('before')) { $Value.before.api } else { $Value.api }
         if ($api.source -is [Collections.IDictionary]) { $api.source.Remove('title') }
+        foreach ($issue in $api.issues) { $issue.Remove('title') }
         foreach ($pull in $api.pulls) { $pull.Remove('title') }
         foreach ($call in $api.calls) {
-            if ($call.method -ceq 'POST' -and $call.path -ceq '/repos/AleksanderGladkov/BCApps-Backport-Test/pulls') {
+            if ($call.method -ceq 'POST' -and $call.path -cin @(
+                '/repos/AleksanderGladkov/BCApps-Backport-Test/pulls',
+                '/repos/AleksanderGladkov/BCApps-Backport-Test/issues'
+            )) {
                 $call.data.Remove('title')
             }
         }
@@ -635,11 +639,11 @@ function Get-BackportStageReferences {
 function Invoke-ReferenceStageHandoff {
     param($Test, [string[]]$Stages, [switch]$CaptureFailure, [AllowNull()]$UserResponse)
     $input = Get-BackportReferenceInput @PSBoundParameters
-    $key = Get-StageHash (ConvertTo-BackportReferenceBytes $input -IgnorePrTitles)
+    $key = Get-StageHash (ConvertTo-BackportReferenceBytes $input -IgnoreDisplayTitles)
     $references = Get-BackportStageReferences
     # Display titles have their own tests; historical stage effects remain authoritative.
     $matchingKeys = @($references.records.Keys | Where-Object {
-        (Get-StageHash (ConvertTo-BackportReferenceBytes $references.records[$_].input -IgnorePrTitles)) -ceq $key
+        (Get-StageHash (ConvertTo-BackportReferenceBytes $references.records[$_].input -IgnoreDisplayTitles)) -ceq $key
     })
     if ($matchingKeys.Count -eq 0) { throw 'uncaptured_stage_reference_input' }
     if ($matchingKeys.Count -ne 1) { throw 'ambiguous_stage_reference_input' }
@@ -668,8 +672,8 @@ function Invoke-ReferenceStageHandoff {
     $response = @{ outcomes = @($outcomes.ToArray()); failure = $failure; api = $snapshot.api; git_effects = $snapshot.git_effects }
     foreach ($pair in @(@{ actual = $response; expected = $reference.response; name = 'response' },
         @{ actual = $snapshot; expected = $reference.after; name = 'receipt' })) {
-        if ((Get-StageHash (ConvertTo-BackportReferenceBytes $pair.actual -IgnorePrTitles)) -cne
-            (Get-StageHash (ConvertTo-BackportReferenceBytes $pair.expected -IgnorePrTitles))) {
+        if ((Get-StageHash (ConvertTo-BackportReferenceBytes $pair.actual -IgnoreDisplayTitles)) -cne
+            (Get-StageHash (ConvertTo-BackportReferenceBytes $pair.expected -IgnoreDisplayTitles))) {
             throw ('stage_reference_' + $pair.name + '_mismatch')
         }
     }

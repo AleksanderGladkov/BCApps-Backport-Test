@@ -1959,7 +1959,7 @@ function Assert-BackportExistingPrProof {
 }
 
 function Read-BackportTracking {
-    param($Config, $Plan, $Source)
+    param($Config, $Plan, $Source, [ref]$IssueRecord)
     $value = Read-BackportArtifact $Config 'tracking.json'
     if (-not (Test-BackportLiteral $value['plan_hash'] @((Get-BackportPlanHash $Plan)))) { throw 'tracking_plan_mismatch' }
     if ($Config.dry_run) {
@@ -1976,6 +1976,7 @@ function Read-BackportTracking {
         -not (Test-BackportLiteral $value['issue_url'] @($issue['html_url']))) { throw 'tracking_issue_mismatch' }
     if (Test-BackportLiteral $issue['state'] @('closed')) { Assert-BackportExistingPrProof -Config $Config -Plan $Plan -Issue $issue -Source $Source }
     Assert-BackportRequestPolicy $Config
+    if ($null -ne $IssueRecord) { $IssueRecord.Value = $issue }
     return ,$value
 }
 
@@ -2107,12 +2108,13 @@ function Invoke-BackportTrack {
             if (Test-BackportLiteral $previous['status'] @('ambiguous')) { throw 'issue_create_ambiguous' }
             throw 'previous_issue_missing'
         }
+        $issueTitle = Get-BackportPrTitle $context.source
         Assert-BackportFreshCreation $Config
         $state['status'] = 'ambiguous'
         Write-BackportState $Config 'tracking.json' $state
         Assert-BackportRequestPolicy $Config
         $issue = Invoke-BackportHttp -Config $Config -Method POST -Path '/repos/AleksanderGladkov/BCApps-Backport-Test/issues' -Data @{
-            title = "[29.x] Backport #$($Config.source_pr)"; body = Get-BackportIssueBody $Config $plan
+            title = $issueTitle; body = Get-BackportIssueBody $Config $plan
         }
         $null = Get-BackportObjectUrl $issue 'issues'
         $issue = Invoke-BackportHttp -Config $Config -Method GET -Path ('/repos/AleksanderGladkov/BCApps-Backport-Test/issues/' + $issue['number'])
@@ -2295,7 +2297,8 @@ function Invoke-BackportPublish {
     param($Config)
     $plan = Read-BackportPlan $Config
     $context = Get-BackportRemoteContext $Config $plan
-    $tracking = Read-BackportTracking -Config $Config -Plan $plan -Source $context.source
+    $trackingIssue = $null
+    $tracking = Read-BackportTracking -Config $Config -Plan $plan -Source $context.source -IssueRecord ([ref]$trackingIssue)
     $result = Read-BackportResult -Config $Config -Plan $plan
     if ($Config.dry_run) { return ,(Complete-BackportStage -Config $Config -Plan $plan -Tracking $tracking -Status 'dry-run') }
     if (-not (Test-BackportLiteral $context.target @($plan['target_base_sha']))) {
@@ -2332,7 +2335,9 @@ function Invoke-BackportPublish {
         if (-not (Test-BackportLiteral $current.target @($plan['target_base_sha']))) {
             return ,(Complete-BackportStage -Config $Config -Plan $plan -Tracking $tracking -Status 'needs-attention' -Reason 'target_advanced')
         }
-        $prTitle = Get-BackportPrTitle $current.source
+        $prTitle = Get-BackportField $trackingIssue 'title'
+        if ($prTitle -isnot [string] -or [string]::IsNullOrWhiteSpace($prTitle) -or
+            $prTitle -match '[\x00-\x1f\x7f]') { throw 'invalid_issue_title' }
         $journal = Get-BackportPublicationJournal $Config $plan
         if (Test-BackportLiteral 'pr' $journal['attempted']) { throw 'pr_create_ambiguous' }
         if ($null -eq $head) {
@@ -2390,7 +2395,7 @@ function Get-BackportSafeReason {
         'triggering_actor_mismatch','source_not_merged','source_wrong_base','source_changed','duplicate_plan_files',
         'invalid_plan_commits','incomplete_commit_list','source_commits_changed','plan_files_mismatch',
         'object_not_actions_bot_owned','invalid_object_number','invalid_object_id','invalid_object_url',
-        'issue_marker_mismatch','invalid_issue_state','branch_pr_base_mismatch','duplicate_backport_prs',
+        'issue_marker_mismatch','invalid_issue_title','invalid_issue_state','branch_pr_base_mismatch','duplicate_backport_prs',
         'pr_branch_mismatch','pr_provenance_mismatch','closed_unmerged_pr','issue_without_verified_pr',
         'closed_issue_without_merged_pr','closed_issue_without_content_proof','pr_head_changed',
         'tracking_plan_mismatch','invalid_dry_tracking','tracking_incomplete','invalid_issue_number',
