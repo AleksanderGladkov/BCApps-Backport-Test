@@ -54,8 +54,11 @@ under distinct OS/attempt artifact names. A missing result or failed dependency
 setup is not acceptance. The full gate requires all 67 mapped baseline scenarios
 and TEST-013 through TEST-024 plus **LT-01 through LT-13**, including LT-10's actual
 workflow graph, permissions, trusted policy checkout, artifact chain and runner
-contract. No skipped or unexecuted cases are accepted. Local expression fixtures
-check the supported YAML contract, not GitHub's runtime evaluator. These tests do
+contract. No skipped or unexecuted cases are accepted. Workflow checks cover
+event inputs, concurrency, trusted checkout, permissions, action pinning and
+artifact flow. They do not pin display wording, comments or historical workflow
+versions. Local expression fixtures check the supported contract, not GitHub's
+runtime evaluator. These tests do
 not validate AL product behavior. Default XML output is external to the repository;
 temporary Git fixtures use owned `.github/scripts/.backport-run-*` directories and are cleaned
 up by the suite. The scoped `.gitignore` excludes only `backport-pester*.xml`;
@@ -149,6 +152,14 @@ objects and does not bypass recovery guards. This is not a durable queue: pendin
 runs can be replaced. **Removing the label is not cancellation**; the original
 request may continue. Use reviewed live-policy withdrawal or explicit Actions
 cancellation to stop subsequent work, subject to the race limitations below.
+
+New backport PR titles use `[29.x] <source PR title>`, removing `[main]` and
+`[master]` tags and their following space without changing other title text.
+Existing backport PRs keep their titles when reused. PR descriptions remain
+`Backport of #<source>` and `Fixes #<tracking issue>` with the existing provenance;
+the source PR description is not copied. Branch names remain
+`backport/29.x/pr-<source PR>`. The source number is also stored in the plan and
+provenance marker, while the deterministic branch name supports existing-PR lookup.
 
 ## Requesters, repository scope and live policy
 

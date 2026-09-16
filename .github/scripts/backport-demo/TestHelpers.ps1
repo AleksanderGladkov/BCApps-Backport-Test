@@ -95,8 +95,7 @@ function Get-BackportWorkflowTestProjection {
         $Event.pull_request.base.repo.full_name -eq 'AleksanderGladkov/BCApps-Backport-Test' -and
         $Event.number -eq $Event.pull_request.number -and $Event.number -gt 0 -and $Event.number -lt 2147483648)
     $group = [regex]::Match($Text, '(?m)^  group: (.+)$').Groups[1].Value
-    $groupEdit = @(Get-BackportLabelWorkflowEdits | Where-Object { $_.Before.StartsWith('  group:', [StringComparison]::Ordinal) })
-    $group | Should -BeExactly $groupEdit[0].After.Trim().Substring('group: '.Length)
+    $group | Should -BeExactly 'backport-demo-${{ github.repository_id }}-${{ (github.event_name == ''workflow_dispatch'' || (github.event_name == ''pull_request_target'' && github.event.action == ''labeled'' && github.event.label.name == ''backport:29.x'' && github.event.pull_request.merged == true && github.event.pull_request.state == ''closed'' && github.event.pull_request.base.ref == ''main'' && github.event.repository.id == 1369849596 && github.event.repository.full_name == ''AleksanderGladkov/BCApps-Backport-Test'' && github.event.pull_request.base.repo.id == 1369849596 && github.event.pull_request.base.repo.full_name == ''AleksanderGladkov/BCApps-Backport-Test'' && github.event.number == github.event.pull_request.number && github.event.number > 0 && github.event.number < 2147483648)) && (github.event_name == ''pull_request_target'' && github.event.pull_request.number || inputs.source_pr) || format(''rejected-{0}'', github.run_id) }}-29'
     @{
         source = $sourceValue; dry = $dryValue
         title = $title.Replace($sourceExpression, $sourceValue).Replace($dryExpression, $dryValue)
@@ -493,7 +492,18 @@ function ConvertTo-StageComments {
 }
 
 function ConvertTo-BackportReferenceBytes {
-    param([AllowNull()]$Value)
+    param([AllowNull()]$Value, [switch]$IgnorePrTitles)
+    if ($IgnorePrTitles) {
+        $Value = Copy-BackportTestValue $Value
+        $api = if ($Value.ContainsKey('before')) { $Value.before.api } else { $Value.api }
+        if ($api.source -is [Collections.IDictionary]) { $api.source.Remove('title') }
+        foreach ($pull in $api.pulls) { $pull.Remove('title') }
+        foreach ($call in $api.calls) {
+            if ($call.method -ceq 'POST' -and $call.path -ceq '/repos/AleksanderGladkov/BCApps-Backport-Test/pulls') {
+                $call.data.Remove('title')
+            }
+        }
+    }
     function ConvertTo-OrderedReference {
         param([AllowNull()]$Item)
         if ($Item -is [Collections.IDictionary]) {
@@ -625,11 +635,16 @@ function Get-BackportStageReferences {
 function Invoke-ReferenceStageHandoff {
     param($Test, [string[]]$Stages, [switch]$CaptureFailure, [AllowNull()]$UserResponse)
     $input = Get-BackportReferenceInput @PSBoundParameters
-    $key = Get-StageHash (ConvertTo-BackportReferenceBytes $input)
+    $key = Get-StageHash (ConvertTo-BackportReferenceBytes $input -IgnorePrTitles)
     $references = Get-BackportStageReferences
-    if (-not $references.records.ContainsKey($key)) { throw 'uncaptured_stage_reference_input' }
-    $reference = $references.records[$key]
-    if ((Get-StageHash (ConvertTo-BackportReferenceBytes $reference.input)) -cne $key) { throw 'stage_reference_input_mismatch' }
+    # Display titles have their own tests; historical stage effects remain authoritative.
+    $matchingKeys = @($references.records.Keys | Where-Object {
+        (Get-StageHash (ConvertTo-BackportReferenceBytes $references.records[$_].input -IgnorePrTitles)) -ceq $key
+    })
+    if ($matchingKeys.Count -eq 0) { throw 'uncaptured_stage_reference_input' }
+    if ($matchingKeys.Count -ne 1) { throw 'ambiguous_stage_reference_input' }
+    $reference = $references.records[$matchingKeys[0]]
+    if ((Get-StageHash (ConvertTo-BackportReferenceBytes $reference.input)) -cne $matchingKeys[0]) { throw 'stage_reference_input_mismatch' }
     $filter = $Test.HttpFilter
     if ($PSBoundParameters.ContainsKey('UserResponse')) {
         $Test.HttpFilter = {
@@ -653,8 +668,8 @@ function Invoke-ReferenceStageHandoff {
     $response = @{ outcomes = @($outcomes.ToArray()); failure = $failure; api = $snapshot.api; git_effects = $snapshot.git_effects }
     foreach ($pair in @(@{ actual = $response; expected = $reference.response; name = 'response' },
         @{ actual = $snapshot; expected = $reference.after; name = 'receipt' })) {
-        if ((Get-StageHash (ConvertTo-BackportReferenceBytes $pair.actual)) -cne
-            (Get-StageHash (ConvertTo-BackportReferenceBytes $pair.expected))) {
+        if ((Get-StageHash (ConvertTo-BackportReferenceBytes $pair.actual -IgnorePrTitles)) -cne
+            (Get-StageHash (ConvertTo-BackportReferenceBytes $pair.expected -IgnorePrTitles))) {
             throw ('stage_reference_' + $pair.name + '_mismatch')
         }
     }
@@ -683,7 +698,7 @@ function New-FakeGitHub {
     $api = [pscustomobject]@{
         fixture = $Fixture; origin = $Fixture.Origin; repo = $repo
         source = @{
-            number = 7; merged = $true; merge_commit_sha = $Source
+            number = 7; title = 'Update AL source'; merged = $true; merge_commit_sha = $Source
             head = @{ sha = $Head }; changed_files = 1
             base = @{ ref = 'main'; repo = (Copy-BackportTestValue $repo) }
         }
@@ -883,7 +898,7 @@ function Invoke-FakeGitHub {
                 while ($number -in @($Api.issues.number) + @($Api.pulls.number)) { $number++ }
                 $value = @{
                     number = $number; id = 900 + $number; state = 'open'; merged = $false
-                    body = $Data.body; user = @{ id = 41898282 }
+                    title = $Data.title; body = $Data.body; user = @{ id = 41898282 }
                     head = @{ sha = $head; ref = $Data.head; repo = (Copy-BackportTestValue $Api.repo) }
                     base = @{ ref = $Data.base; repo = (Copy-BackportTestValue $Api.repo) }
                     html_url = "https://github.com/$($Api.repo.full_name)/pull/$number"

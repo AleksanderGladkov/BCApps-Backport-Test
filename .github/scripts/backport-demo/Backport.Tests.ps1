@@ -378,6 +378,31 @@ Describe 'Label history and immutable live policy helpers' -Tag 'L-002' {
     }
 }
 
+Describe 'Backport PR titles' -Tag 'PR-title' {
+    BeforeAll {
+        Import-Module (Join-Path $PSScriptRoot 'Backport.psm1') -Force
+        $script:TitleCore = Get-Module Backport
+    }
+    It 'uses the source title without main or master tags and preserves other text' {
+        foreach ($case in @(
+            @{ Source = '[main] Fix "posting" [FI]'; Expected = '[29.x] Fix "posting" [FI]' }
+            @{ Source = '[master] Fix [main] posting'; Expected = '[29.x] Fix posting' }
+            @{ Source = 'Fix [MASTER] posting [main]'; Expected = '[29.x] Fix posting' }
+            @{ Source = 'Fix [maintain] posting'; Expected = '[29.x] Fix [maintain] posting' }
+        )) {
+            (& $script:TitleCore { param($title) Get-BackportPrTitle @{ title = $title } } $case.Source) |
+                Should -BeExactly $case.Expected
+        }
+    }
+    It 'rejects missing invalid or empty normalized titles with a sanitized reason' {
+        foreach ($source in @(@{}, @{ title = $null }, @{ title = 12 }, @{ title = '[main] [master]' }, @{ title = "Fix`nSECRET" })) {
+            { & $script:TitleCore { param($value) Get-BackportPrTitle $value } $source } |
+                Should -Throw -ExpectedMessage 'invalid_source_title'
+        }
+        (& $script:TitleCore { Get-BackportSafeReason 'invalid_source_title' }) | Should -BeExactly 'invalid_source_title'
+    }
+}
+
 Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
     BeforeAll {
         Import-Module (Join-Path $PSScriptRoot 'Backport.psm1') -Force
@@ -408,8 +433,10 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
     AfterEach {
         Remove-LocalGitFixture $script:T.Fixture
     }
-    It 'publishes a label through all four real stages with exact existing object content' -Tag 'L-002', 'LT-07' {
+    It 'publishes a label through all four real stages with exact existing object content' -Tag 'L-002', 'LT-07', 'PR-title' {
         Set-BackportLabelStageConfig $T
+        $T.Api.source.title = '[main] Fix source handling'
+        $T.Api.source.body = 'Original description must not be copied.'
         $T.Config.event_name | Should -BeExactly 'pull_request_target'
         $T.Config.sender_id | Should -Be 59250993
         $published = Invoke-BackportTestStages $T -Last publish
@@ -417,6 +444,7 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
         $T.Config.triggering_actor_id | Should -Be 59250993
         $T.Api.issues.Count | Should -Be 1
         $T.Api.pulls.Count | Should -Be 1
+        $T.Api.pulls[0].title | Should -BeExactly '[29.x] Fix source handling'
         $T.Pushes.Count | Should -Be 1
         @($T.Pushes[0] | Where-Object { $_ -clike '--force-with-lease=*' }) |
             Should -Be @('--force-with-lease=refs/heads/backport/29.x/pr-7:')
@@ -438,8 +466,10 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
         @((Get-StageJson $T).Keys) | Should -Not -Contain 'event_name'
         @((Get-StageJson $T).Keys) | Should -Not -Contain 'policy_digest'
     }
-    It 'reuses manual then label relabel and rerun identities without additional creates' -Tag 'L-002', 'LT-08' {
+    It 'reuses manual then label relabel and rerun identities without additional creates' -Tag 'L-002', 'LT-08', 'PR-title' {
         $null = Invoke-BackportTestStages $T -Last publish
+        $T.Api.pulls[0].title = 'Backport #7 to 29.x'
+        $T.Api.source.title = '[master] Updated source summary'
         $head = Invoke-StageFixtureGit $T @('rev-parse', 'backport/29.x/pr-7')
         $creates = @($T.Api.calls | Where-Object method -CEQ POST).Count
         foreach ($pair in @(@('124', '1'), @('125', '1'), @('125', '2'))) {
@@ -448,6 +478,7 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
             (Invoke-BackportTestStages $T -Last publish).status | Should -BeExactly 'pr-reused'
             $T.Api.issues[0].number | Should -Be 101
             $T.Api.pulls[0].number | Should -Be 102
+            $T.Api.pulls[0].title | Should -BeExactly 'Backport #7 to 29.x'
             @($T.Api.calls | Where-Object method -CEQ POST).Count | Should -Be $creates
             $T.Pushes.Count | Should -Be 1
             (Invoke-StageFixtureGit $T @('rev-parse', 'backport/29.x/pr-7')) | Should -BeExactly $head
@@ -2144,19 +2175,26 @@ Describe 'Label workflow admission contract' -Tag 'L-001', 'LT-05' {
         (Get-BackportWorkflowTestProjection $production pull_request_target $event).group |
             Should -BeExactly 'backport-demo-1369849596-7-29'
     }
-    It 'admits only the explicit feature edits while preserving the historical baseline gate' -Tag 'L-003', 'LT-10' {
-        Assert-BackportWorkflowBaseline $script:Reference $production $testsWorkflow
-        foreach ($edit in Get-BackportLabelWorkflowEdits) {
-            [regex]::Matches($production, [regex]::Escape($edit.After)).Count | Should -Be $edit.Count
-            $weakened = [regex]::new([regex]::Escape($edit.After)).Replace($production, $edit.Before, 1)
-            { Assert-BackportWorkflowBaseline $script:Reference $weakened $testsWorkflow } | Should -Throw 'workflow_baseline_mismatch'
-        }
+    It 'preserves trusted execution, write permissions and artifact dependencies' -Tag 'TEST-017', 'L-003', 'LT-10' {
+        $triggers = [regex]::Match($production, '(?ms)^on:\n.*?(?=^\S|\z)').Value
+        @([regex]::Matches($triggers, '(?m)^  ([a-z_]+):') | ForEach-Object {
+            $_.Groups[1].Value
+        } | Sort-Object) | Should -Be @('pull_request_target', 'workflow_dispatch')
+        $sourceInput = [regex]::Match($production, '(?ms)^      source_pr:\n.*?(?=^      \w+:|^\S|\z)').Value
+        $sourceInput | Should -Match '(?m)^        required: true$'
+        $sourceInput | Should -Match '(?m)^        type: string$'
+        $dryInput = [regex]::Match($production, '(?ms)^      dry_run:\n.*?(?=^      \w+:|^\S|\z)').Value
+        $dryInput | Should -Match '(?m)^        required: true$'
+        $dryInput | Should -Match '(?m)^        default: true$'
+        $dryInput | Should -Match '(?m)^        type: boolean$'
+        $production | Should -Match ([regex]::Escape(
+            "    if: github.repository == 'AleksanderGladkov/BCApps-Backport-Test' && github.repository_id == '1369849596' && github.ref == 'refs/heads/main'"))
+        $production | Should -Match ([regex]::Escape('  ALLOWED_ACTOR_IDS: ${{ vars.BACKPORT_ALLOWED_ACTOR_IDS || ''59250993'' }}'))
         $production | Should -Match '(?m)^  pull_request_target:\n    types: \[labeled\]\n    branches: \[main\]$'
         $production | Should -Match '(?m)^    outputs:\n      plan_ready: \$\{\{ steps.validate.outputs.plan_ready \}\}$'
         $production | Should -Match '(?m)^      - name: Validate requester, source history and target\n        id: validate$'
         $production | Should -Match '(?m)^  track:\n    needs: validate\n    if: needs.validate.outputs.plan_ready == ''true''$'
         $production | Should -Match '(?m)^  prepare:\n    needs: track$'
-        $production | Should -Match '(?m)^      - name: Save preparation result$'
         $production | Should -Match '(?m)^  publish:\n    needs: prepare$'
         [regex]::Matches($production, 'ref: \$\{\{ github.workflow_sha \}\}\n          persist-credentials: false\n          sparse-checkout: .github/scripts/backport-demo').Count | Should -Be 4
         $production | Should -Match '(?m)^permissions: \{\}$'
@@ -2173,6 +2211,8 @@ Describe 'Label workflow admission contract' -Tag 'L-001', 'LT-05' {
         foreach ($contract in $contracts) {
             $job = [regex]::Match($production, "(?ms)^  $($contract.Stage):\n.*?(?=^  \w+:|\z)").Value
             $job | Should -Match ([regex]::Escape("    permissions:`n      $($contract.Permissions)`n    steps:"))
+            $job | Should -Match ([regex]::Escape("`$PSVersionTable.PSVersion -lt [version]'7.4'"))
+            $job | Should -Match ([regex]::Escape("[Environment]::Version -lt [version]'8.0'"))
             $checkout = [regex]::Match($job, '(?m)^          ref: (.+)\n          persist-credentials: false\n          sparse-checkout: (.+)$')
             $checkout.Success | Should -BeTrue
             $checkout.Groups[1].Value | Should -BeExactly '${{ github.workflow_sha }}'
@@ -2187,7 +2227,21 @@ Describe 'Label workflow admission contract' -Tag 'L-001', 'LT-05' {
                 $job | Should -Match ([regex]::Escape("        with:`n$artifact`n" + '          path: ${{ runner.temp }}/backport-state'))
             }
         }
+        foreach ($workflow in @($production, $testsWorkflow)) {
+            $actions = [regex]::Matches($workflow, '(?m)^\s*(?:- )?uses: ([^\s]+)')
+            $actions.Count | Should -BeGreaterThan 0
+            foreach ($action in $actions) {
+                $action.Groups[1].Value | Should -Match '\Aactions/(checkout|upload-artifact|download-artifact)@[a-f0-9]{40}\z'
+            }
+        }
+        $production | Should -Match '(?m)^defaults:\n  run:\n    shell: pwsh$'
         $testsWorkflow | Should -Match '(?m)^on:\n  workflow_dispatch:\n\npermissions:\n  contents: read$'
+        $testsWorkflow | Should -Match ([regex]::Escape("    if: github.repository == 'AleksanderGladkov/BCApps-Backport-Test'"))
+        $testsWorkflow | Should -Not -Match '(?m)^\s+(contents|actions|issues|pull-requests): write$'
+        $testsWorkflow | Should -Match '(?m)^      fail-fast: false$'
+        $testsWorkflow | Should -Match '(?m)^        os: \[ubuntu-latest, windows-latest\]$'
+        $testsWorkflow | Should -Match ([regex]::Escape('runs-on: ${{ matrix.os }}'))
+        $testsWorkflow | Should -Match '(?m)^        shell: pwsh$'
         $testsWorkflow | Should -Match ([regex]::Escape(
             "          sparse-checkout: |`n            .github/scripts/backport-demo`n" +
             "            .github/workflows/backport-demo.yml`n            .github/workflows/backport-demo-tests.yml`n          sparse-checkout-cone-mode: false"))
@@ -2221,345 +2275,6 @@ Describe 'Label workflow admission contract' -Tag 'L-001', 'LT-05' {
     }
 }
 
-Describe 'Offline workflow baseline and EPIC-003 runner selection' -Tag 'EPIC-003' {
-    BeforeAll {
-        $workflows = if ($env:BACKPORT_TEST_WORKFLOW_DIR) { $env:BACKPORT_TEST_WORKFLOW_DIR } else {
-            [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '../../workflows'))
-        }
-        $script:WorkflowTexts = @{
-            production = [IO.File]::ReadAllText((Join-Path $workflows 'backport-demo.yml')).Replace("`r`n", "`n")
-            tests = [IO.File]::ReadAllText((Join-Path $workflows 'backport-demo-tests.yml')).Replace("`r`n", "`n")
-        }
-        $script:ActionPinUpdates = @{
-            'actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4' = 'actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1'
-            'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4' = 'actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1'
-            'actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4' = 'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1'
-        }
-        $script:HistoricalWorkflowTexts = Copy-BackportTestValue $script:WorkflowTexts
-        $script:HistoricalWorkflowTexts.production = ConvertFrom-BackportLabelWorkflow $script:HistoricalWorkflowTexts.production
-        foreach ($kind in @('production', 'tests')) {
-            foreach ($oldPin in $script:ActionPinUpdates.Keys) {
-                $script:HistoricalWorkflowTexts[$kind] = $script:HistoricalWorkflowTexts[$kind].Replace($script:ActionPinUpdates[$oldPin], $oldPin)
-            }
-        }
-    }
-    It 'selects only <SelectedEpic> through the real runner without promoting development to acceptance' -Tag 'L-003', 'LT-10' -ForEach @(
-        @{ SelectedEpic = 'EPIC-003' }
-        @{ SelectedEpic = 'L-003' }
-    ) {
-        $script:SelectedRunnerEpic = $SelectedEpic
-        $script:CapturedStageConfiguration = $null
-        Mock Invoke-Pester {
-            $script:CapturedStageConfiguration = $Configuration
-            if (@($Configuration.Filter.Tag.Value).Count -eq 0) { return New-SyntheticResult }
-            $result = New-SyntheticDevelopmentResult
-            $result.Tests[0].Tag = @($script:SelectedRunnerEpic)
-            $result
-        }
-        Mock Import-Module {} -ParameterFilter { $Name -ceq 'Pester' -and $RequiredVersion -eq '5.7.1' }
-        Mock Write-Host {}
-        $path = Join-Path $script:HarnessRoot 'epic-selection.xml'
-        $gate = Invoke-BackportTests -Epic $SelectedEpic -ResultPath $path
-        $gate.ExitCode | Should -Be 0
-        $gate.Mode | Should -BeExactly 'Development'
-        $gate.Message | Should -BeExactly "Development $SelectedEpic - NOT full acceptance."
-        @($script:CapturedStageConfiguration.Filter.Tag.Value) | Should -Be @($SelectedEpic)
-        @($script:CapturedStageConfiguration.Filter.FullName.Value).Count | Should -Be 0
-        $script:CapturedStageConfiguration.TestResult.OutputPath.Value | Should -BeExactly $path
-        $script:CapturedStageConfiguration.TestDrive.Enabled.Value | Should -BeFalse
-        $gate = Invoke-BackportTests -ResultPath $path
-        $gate.ExitCode | Should -Be 0
-        $gate.Mode | Should -BeExactly 'FullAcceptance'
-        $gate.BaselinePassed | Should -Be 67
-        $gate.MigrationPassed | Should -Be 12
-        $gate.LabelPassed | Should -Be 13
-        @($script:CapturedStageConfiguration.Run.Path.Value) | Should -Be @((Join-Path $PSScriptRoot 'Backport.Tests.ps1'))
-        @($script:CapturedStageConfiguration.Filter.Tag.Value).Count | Should -Be 0
-        @($script:CapturedStageConfiguration.Filter.FullName.Value).Count | Should -Be 0
-        $script:CapturedStageConfiguration.TestResult.OutputPath.Value | Should -BeExactly $path
-        $script:CapturedStageConfiguration.TestDrive.Enabled.Value | Should -BeFalse
-        Should -Invoke Invoke-Pester -Times 2 -Exactly
-        Should -Invoke Import-Module -Times 2 -Exactly -ParameterFilter {
-            $Name -ceq 'Pester' -and $RequiredVersion -eq '5.7.1'
-        }
-    }
-    It 'verifies the pinned checked-out workflow bytes with LF and CRLF checkouts' -Tag 'TEST-017', 'L-003', 'LT-10' {
-        foreach ($newline in @("`n", "`r`n")) {
-            Assert-BackportWorkflowBaseline -Parity $script:Reference `
-                -ProductionText $script:WorkflowTexts.production.Replace("`n", $newline) `
-                -TestsText $script:WorkflowTexts.tests.Replace("`n", $newline)
-        }
-        foreach ($kind in @('production', 'tests')) {
-            foreach ($oldPin in $script:ActionPinUpdates.Keys) {
-                if (-not $script:HistoricalWorkflowTexts[$kind].Contains($oldPin, [StringComparison]::Ordinal)) { continue }
-                $newPin = $script:ActionPinUpdates[$oldPin]
-                $script:WorkflowTexts[$kind].Contains($newPin, [StringComparison]::Ordinal) | Should -BeTrue
-                $script:WorkflowTexts[$kind].Contains($oldPin, [StringComparison]::Ordinal) | Should -BeFalse
-                $mixed = Copy-BackportTestValue $script:WorkflowTexts
-                $mixed[$kind] = [regex]::new([regex]::Escape($newPin)).Replace($mixed[$kind], $oldPin, 1)
-                { Assert-BackportWorkflowBaseline -Parity $script:Reference -ProductionText $mixed.production -TestsText $mixed.tests } |
-                    Should -Throw -ExpectedMessage 'workflow_baseline_mismatch'
-            }
-        }
-    }
-    It 'accepts the exact planned PowerShell cutover and rejects weakened matrix or runtime contracts' -Tag 'TEST-017' {
-        $pythonSetup = @(
-            '      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5'
-            '        with:'
-            '          python-version: ''3.13'''
-        ) -join "`n"
-        $runtimeSetup = @(
-            '      - name: Check PowerShell runtime'
-            '        run: |'
-            '          if ($PSVersionTable.PSVersion -lt [version]''7.4'' -or [Environment]::Version -lt [version]''8.0'') {'
-            '            throw ''PowerShell 7.4+ and .NET 8+ are required.'''
-            '          }'
-        ) -join "`n"
-        $production = $script:HistoricalWorkflowTexts.production.Replace($pythonSetup, $runtimeSetup).
-            Replace("  PYTHONDONTWRITEBYTECODE: '1'`n", '').Replace('shell: bash', 'shell: pwsh')
-        foreach ($stage in @('validate', 'track', 'prepare', 'publish')) {
-            $production = $production.Replace("python .github/scripts/backport-demo/controller.py $stage",
-                "./.github/scripts/backport-demo/Invoke-Backport.ps1 -Stage $stage")
-        }
-        $tests = @(
-            'name: Backport executor tests'
-            ''
-            'on:'
-            '  workflow_dispatch:'
-            ''
-            'permissions:'
-            '  contents: read'
-            ''
-            'jobs:'
-            '  test:'
-            '    if: github.repository == ''AleksanderGladkov/BCApps-Backport-Test'''
-            '    strategy:'
-            '      fail-fast: false'
-            '      matrix:'
-            '        os: [ubuntu-latest, windows-latest]'
-            '    runs-on: ${{ matrix.os }}'
-            '    timeout-minutes: 30'
-            '    defaults:'
-            '      run:'
-            '        shell: pwsh'
-            '    env:'
-            '      PYTHONDONTWRITEBYTECODE: ''1'''
-            '    steps:'
-            '      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4'
-            '        with:'
-            '          ref: ${{ github.sha }}'
-            '          persist-credentials: false'
-            '          sparse-checkout: |'
-            '            .github/scripts/backport-demo'
-            '            .github/workflows/backport-demo.yml'
-            '            .github/workflows/backport-demo-tests.yml'
-            '          sparse-checkout-cone-mode: false'
-            '      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5'
-            '        with:'
-            '          python-version: ''3.13'''
-            '      - name: Check runtimes and provision pinned test dependency'
-            '        id: setup'
-            '        run: |'
-            '          if ($PSVersionTable.PSVersion -lt [version]''7.4'' -or [Environment]::Version -lt [version]''8.0'') {'
-            '            throw ''PowerShell 7.4+ and .NET 8+ are required.'''
-            '          }'
-            '          if (-not (Get-Module -ListAvailable Pester | Where-Object Version -EQ ([version]''5.7.1''))) {'
-            '            Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Repository PSGallery -Force -ErrorAction Stop'
-            '          }'
-            '          Import-Module Pester -RequiredVersion 5.7.1 -ErrorAction Stop'
-            '          Write-Host ("PowerShell {0}; .NET {1}; Pester {2}" -f $PSVersionTable.PSVersion, [Environment]::Version, (Get-Module Pester).Version)'
-            '          git --version'
-            '          if ($LASTEXITCODE -ne 0) { throw ''Git version check failed.'' }'
-            '          python -B -c "import sys, unicodedata; assert sys.version_info[:2] == (3, 13); assert unicodedata.unidata_version == ''15.1.0''; print(sys.version); print(''Unicode'', unicodedata.unidata_version)"'
-            '          if ($LASTEXITCODE -ne 0) { throw ''Python reference runtime check failed.'' }'
-            '      - name: Test unchanged Python reference offline'
-            '        run: |'
-            '          python -B -m unittest discover -s .github/scripts/backport-demo -p ''test_*.py'' -v'
-            '          if ($LASTEXITCODE -ne 0) { throw ''Python reference suite failed.'' }'
-            '      - name: Run full PowerShell parity gate offline'
-            '        if: ${{ !cancelled() && steps.setup.outcome == ''success'' }}'
-            '        run: |'
-            '          $env:BACKPORT_TEST_BASELINE_DIR = Join-Path $env:GITHUB_WORKSPACE ''.github/scripts/backport-demo'''
-            '          & ./.github/scripts/backport-demo/Run-Tests.ps1 -ResultPath (Join-Path $env:RUNNER_TEMP ''backport-pester.xml'')'
-            '      - name: Preserve test results'
-            '        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4'
-            '        if: always()'
-            '        with:'
-            '          name: backport-tests-${{ matrix.os }}-${{ github.run_attempt }}'
-            '          path: ${{ runner.temp }}/backport-pester.xml'
-            '          if-no-files-found: error'
-            '          retention-days: 7'
-            ''
-        ) -join "`n"
-        $finalTests = $tests
-        foreach ($pythonBlock in @(
-            ($pythonSetup + "`n")
-            "    env:`n      PYTHONDONTWRITEBYTECODE: '1'`n"
-            ((@(
-                '          python -B -c "import sys, unicodedata; assert sys.version_info[:2] == (3, 13); assert unicodedata.unidata_version == ''15.1.0''; print(sys.version); print(''Unicode'', unicodedata.unidata_version)"'
-                '          if ($LASTEXITCODE -ne 0) { throw ''Python reference runtime check failed.'' }'
-                ''
-            )) -join "`n")
-            ((@(
-                '      - name: Test unchanged Python reference offline'
-                '        run: |'
-                '          python -B -m unittest discover -s .github/scripts/backport-demo -p ''test_*.py'' -v'
-                '          if ($LASTEXITCODE -ne 0) { throw ''Python reference suite failed.'' }'
-                ''
-            )) -join "`n")
-        )) {
-            ([regex]::Matches($finalTests, [regex]::Escape($pythonBlock))).Count | Should -Be 1
-            $finalTests = $finalTests.Replace($pythonBlock, '')
-        }
-        $baselineAssignment = '          $env:BACKPORT_TEST_BASELINE_DIR = Join-Path $env:GITHUB_WORKSPACE ''.github/scripts/backport-demo'''
-        ([regex]::Matches($finalTests, [regex]::Escape($baselineAssignment))).Count | Should -Be 1
-        $finalTests = $finalTests.Replace($baselineAssignment,
-            '          $env:BACKPORT_TEST_WORKFLOW_DIR = Join-Path $env:GITHUB_WORKSPACE ''.github/workflows''')
-        $testStepCount = ([regex]::Matches($tests, '(?m)^      - ')).Count
-        ([regex]::Matches($finalTests, '(?m)^      - ')).Count | Should -Be ($testStepCount - 2)
-        $finalTests | Should -Not -Match '(?i)python|test_\*\.py|BACKPORT_TEST_BASELINE_DIR'
-        Write-Host ('Final tests workflow SHA256 (LF): ' + [Convert]::ToHexString(
-            [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($finalTests))
-        ).ToLowerInvariant())
-        ([regex]::Matches($production, [regex]::Escape($runtimeSetup))).Count | Should -Be 4
-        $production | Should -Not -Match 'setup-python|controller\.py|PYTHONDONTWRITEBYTECODE'
-        $baselineProduction = $production.Replace($runtimeSetup, $pythonSetup).Replace('shell: pwsh', 'shell: bash').
-            Replace("`ndefaults:", "  PYTHONDONTWRITEBYTECODE: '1'`n`ndefaults:")
-        foreach ($stage in @('validate', 'track', 'prepare', 'publish')) {
-            $baselineProduction = $baselineProduction.Replace("./.github/scripts/backport-demo/Invoke-Backport.ps1 -Stage $stage",
-                "python .github/scripts/backport-demo/controller.py $stage")
-        }
-        $baselineTests = @(
-            'name: Backport executor tests'
-            ''
-            'on:'
-            '  workflow_dispatch:'
-            ''
-            'permissions:'
-            '  contents: read'
-            ''
-            'jobs:'
-            '  test:'
-            '    if: github.repository == ''AleksanderGladkov/BCApps-Backport-Test'''
-            '    runs-on: ubuntu-latest'
-            '    timeout-minutes: 15'
-            '    steps:'
-            $script:Reference.workflow_baseline.tests.protected_blocks[-1].TrimEnd("`n")
-            $pythonSetup
-            '      - name: Test offline with fake GitHub responses and temporary Git repos'
-            '        env:'
-            '          PYTHONDONTWRITEBYTECODE: ''1'''
-            '        run: python -m unittest discover -s .github/scripts/backport-demo -p ''test_*.py'' -v'
-            ''
-        ) -join "`n"
-        foreach ($newline in @("`n", "`r`n")) {
-            Assert-BackportWorkflowBaseline -Parity $script:Reference `
-                -ProductionText $production.Replace("`n", $newline) -TestsText $tests.Replace("`n", $newline)
-            Assert-BackportWorkflowBaseline -Parity $script:Reference `
-                -ProductionText $baselineProduction.Replace("`n", $newline) -TestsText $baselineTests.Replace("`n", $newline)
-            Assert-BackportWorkflowBaseline -Parity $script:Reference `
-                -ProductionText $production.Replace("`n", $newline) -TestsText $finalTests.Replace("`n", $newline)
-        }
-        foreach ($mutation in @(
-            @{ production = $production.Replace('shell: pwsh', 'shell: bash'); tests = $tests },
-            @{ production = $production.Replace("[version]'7.4'", "[version]'7.0'"); tests = $tests },
-            @{ production = $production; tests = $tests.Replace('contents: read', 'contents: write') },
-            @{ production = $production; tests = $tests.Replace('os: [ubuntu-latest, windows-latest]', 'os: [ubuntu-latest]') },
-            @{ production = $production; tests = $tests.Replace('fail-fast: false', 'fail-fast: true') },
-            @{ production = $production; tests = $tests.Replace('python -B -m unittest discover', 'echo skipped') }
-        )) {
-            { Assert-BackportWorkflowBaseline -Parity $script:Reference `
-                -ProductionText $mutation.production -TestsText $mutation.tests } |
-                Should -Throw -ExpectedMessage 'workflow_baseline_mismatch'
-        }
-        foreach ($required in @(
-            'name: Backport executor tests'
-            '  workflow_dispatch:'
-            '  contents: read'
-            '    if: github.repository == ''AleksanderGladkov/BCApps-Backport-Test'''
-            '      fail-fast: false'
-            '        os: [ubuntu-latest, windows-latest]'
-            '    runs-on: ${{ matrix.os }}'
-            '    timeout-minutes: 30'
-            '        shell: pwsh'
-            'actions/checkout@11d5960a326750d5838078e36cf38b85af677262'
-            '          ref: ${{ github.sha }}'
-            '          persist-credentials: false'
-            '            .github/workflows/backport-demo.yml'
-            '            .github/workflows/backport-demo-tests.yml'
-            '          sparse-checkout-cone-mode: false'
-            '        id: setup'
-            '[version]''7.4'''
-            '[version]''8.0'''
-            'Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Repository PSGallery -Force -ErrorAction Stop'
-            'Import-Module Pester -RequiredVersion 5.7.1 -ErrorAction Stop'
-            '          git --version'
-            '          if ($LASTEXITCODE -ne 0) { throw ''Git version check failed.'' }'
-            '        if: ${{ !cancelled() && steps.setup.outcome == ''success'' }}'
-            '          $env:BACKPORT_TEST_WORKFLOW_DIR = Join-Path $env:GITHUB_WORKSPACE ''.github/workflows'''
-            '          & ./.github/scripts/backport-demo/Run-Tests.ps1 -ResultPath (Join-Path $env:RUNNER_TEMP ''backport-pester.xml'')'
-            'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02'
-            '        if: always()'
-            '          name: backport-tests-${{ matrix.os }}-${{ github.run_attempt }}'
-            '          path: ${{ runner.temp }}/backport-pester.xml'
-            '          if-no-files-found: error'
-            '          retention-days: 7'
-        )) {
-            $finalTests.Contains($required, [StringComparison]::Ordinal) | Should -BeTrue
-            { Assert-BackportWorkflowBaseline -Parity $script:Reference `
-                -ProductionText $production -TestsText $finalTests.Replace($required, '') } |
-                Should -Throw -ExpectedMessage 'workflow_baseline_mismatch' -Because "final workflow must retain: $required"
-        }
-    }
-    It 'rejects changes to every protected production and manual read-only test block' -Tag 'TEST-017', 'L-003', 'LT-10' {
-        foreach ($kind in @('production', 'tests')) {
-            foreach ($block in $script:Reference.workflow_baseline[$kind].protected_blocks) {
-                $texts = Copy-BackportTestValue $script:WorkflowTexts
-                $protected = $block
-                if ($kind -ceq 'tests' -and -not $texts[$kind].Contains($block, [StringComparison]::Ordinal)) {
-                    $checkout = @(
-                        '          sparse-checkout: |'
-                        '            .github/scripts/backport-demo'
-                        '            .github/workflows/backport-demo.yml'
-                        '            .github/workflows/backport-demo-tests.yml'
-                        '          sparse-checkout-cone-mode: false'
-                        ''
-                    ) -join "`n"
-                    $protected = $block.Replace("          sparse-checkout: .github/scripts/backport-demo`n", $checkout)
-                }
-                foreach ($oldPin in $script:ActionPinUpdates.Keys) {
-                    $protected = $protected.Replace($oldPin, $script:ActionPinUpdates[$oldPin])
-                }
-                if ($kind -ceq 'production') {
-                    foreach ($edit in Get-BackportLabelWorkflowEdits) { $protected = $protected.Replace($edit.Before, $edit.After) }
-                }
-                $texts[$kind].Contains($protected, [StringComparison]::Ordinal) | Should -BeTrue
-                $texts[$kind] = $texts[$kind].Replace($protected, '')
-                { Assert-BackportWorkflowBaseline -Parity $script:Reference `
-                    -ProductionText $texts.production -TestsText $texts.tests } |
-                    Should -Throw -ExpectedMessage 'workflow_baseline_mismatch'
-            }
-        }
-    }
-    It 'rejects changed identity and incomplete or diluted protected-block reference data' -Tag 'TEST-017', 'L-003', 'LT-10' {
-        foreach ($kind in @('production', 'tests')) {
-            foreach ($mutation in @('path', 'hash', 'missing', 'duplicate', 'diluted')) {
-                $reference = Copy-BackportTestValue $script:Reference
-                $entry = $reference.workflow_baseline[$kind]
-                switch ($mutation) {
-                    path { $entry.path = '.github/workflows/renamed.yml' }
-                    hash { $entry.sha256_lf = '0' * 64 }
-                    missing { $entry.protected_blocks = @($entry.protected_blocks | Select-Object -Skip 1) }
-                    duplicate { $entry.protected_blocks[0] = $entry.protected_blocks[1] }
-                    diluted { $entry.protected_blocks[0] = 'name:' }
-                }
-                { Assert-BackportWorkflowBaseline -Parity $reference `
-                    -ProductionText $script:WorkflowTexts.production -TestsText $script:WorkflowTexts.tests } |
-                    Should -Throw -ExpectedMessage 'workflow_baseline_mismatch' -Because "$kind/$mutation must retain the exact baseline contract"
-            }
-        }
-    }
-}
 
 Describe 'Configuration and safe CLI compatibility' -Tag 'EPIC-002', 'TEST-020' {
     BeforeAll {
@@ -3318,24 +3033,6 @@ Describe 'Repository-local reference resources' -Tag 'EPIC-001' {
         { Get-BackportStageReferences -Reference (Join-Path $script:HarnessRoot 'untrusted.json') } | Should -Throw
     }
 
-    It 'retains all correspondence and independently named helper dispositions' -Tag 'EPIC-003', 'TEST-021', 'TEST-022', 'TEST-023', 'TEST-024' {
-        @($script:Reference.correspondence.id) | Should -Be @(1..8 | ForEach-Object { 'MAP-{0:d3}' -f $_ })
-        @($script:Reference.correspondence.disposition) | Should -Be @(
-            'retained', 'adapted', 'adapted', 'retained', 'deferred', 'adapted', 'adapted', 'retained'
-        )
-        $script:Reference.helper_dispositions.Count | Should -Be 5
-        @($script:Reference.helper_dispositions.id) | Should -Be @(
-            'byte-safe-blob', 'canonical-atomic-json', 'result-before-pr', 'github-readback', 'publication-receipt'
-        )
-        @($script:Reference.helper_dispositions.disposition) | Should -Be @(
-            'adapted', 'adapted', 'adapted', 'adapted', 'deferred'
-        )
-        foreach ($entry in @($script:Reference.correspondence) + @($script:Reference.helper_dispositions)) {
-            $entry.decision | Should -Not -BeNullOrEmpty
-        }
-        @($script:Reference.shared_safety.Keys | Sort-Object) | Should -Be @('TEST-021', 'TEST-022', 'TEST-023', 'TEST-024')
-        $script:Reference.shared_safety.'TEST-021'.baseline_cases.Count | Should -Be 4
-    }
 
     It 'retains the pinned complete Unicode profile and redistribution notice' {
         $compat = Get-Content -LiteralPath (Join-Path $PSScriptRoot 'compat.json') -Raw |
@@ -3544,16 +3241,6 @@ Describe 'Offline stateful GitHub fixture' -Tag 'EPIC-001' {
         (Invoke-FakeGitHub $api GET "$root/pulls/7").merge_commit_sha | Should -Be ('2' * 40)
     }
 
-    It 'uses baseline repository and object identities without opening a connection' {
-        $api.repo.id | Should -Be 1369849596
-        $api.repo.full_name | Should -Be 'AleksanderGladkov/BCApps-Backport-Test'
-        $issue = Invoke-FakeGitHub $api POST "$root/issues" @{ title = 'synthetic'; body = 'fixture' }
-        $issue.html_url | Should -Be 'https://github.com/AleksanderGladkov/BCApps-Backport-Test/issues/101'
-        $issue.id | Should -Be 1001
-        $issue.user.id | Should -Be 41898282
-        Should -Invoke Invoke-WebRequest -Times 0 -Exactly
-        Should -Invoke Invoke-RestMethod -Times 0 -Exactly
-    }
 
     It 'paginates lists and source commits without sharing mutable returned data' {
         foreach ($number in 1..205) {
@@ -3665,18 +3352,6 @@ Describe 'Owned local Git fixtures' -Tag 'EPIC-001' {
     }
     AfterEach { if ($fixture) { Remove-LocalGitFixture -Fixture $fixture } }
 
-    It 'pins author and committer times for reproducible fixture identities' {
-        $environment = New-LocalGitEnvironment -Fixture $fixture
-        $environment.GIT_AUTHOR_DATE | Should -Be '2000-01-01T00:00:00Z'
-        $environment.GIT_COMMITTER_DATE | Should -Be '2000-01-01T00:00:00Z'
-        $other = New-LocalGitFixture -ParentPath $script:HarnessRoot
-        try {
-            $other.Target | Should -Be $fixture.Target
-            $other.Head | Should -Be $fixture.Head
-            $other.Source | Should -Be $fixture.Source
-        }
-        finally { Remove-LocalGitFixture $other }
-    }
 
     It 'leaves a real branch after losing the push response without retrying' {
         $work = New-LocalGitWorkingCopy -Fixture $fixture

@@ -349,41 +349,6 @@
       "pester_name": "test_unknown_or_wrong_scope_history_never_grants_creation"
     }
   ],
-  "workflow_baseline": {
-    "scope": "Offline baseline only; PowerShell cutover and hosted parsing/dispatch remain separately approval-gated.",
-    "production": {
-      "path": ".github/workflows/backport-demo.yml",
-      "sha256_lf": "ea06994495c62db9a9fd14802fbbd273b762be938588028ed8d8057d9ec2a9fb",
-      "protected_blocks": [
-        "name: Backport to 29.x\nrun-name: Backport PR ${{ inputs.source_pr }} to 29.x (dry run = ${{ inputs.dry_run }})\n",
-        "on:\n  workflow_dispatch:\n    inputs:\n      source_pr:\n        description: Merged source PR number in this test fork\n        required: true\n        type: string\n      dry_run:\n        description: Preview without creating or changing repository objects\n        required: true\n        default: true\n        type: boolean\n",
-        "permissions: {}\n\nconcurrency:\n  group: backport-demo-${{ github.repository_id }}-${{ inputs.source_pr }}-29\n  cancel-in-progress: false\n",
-        "  INPUT_SOURCE_PR: ${{ inputs.source_pr }}\n  INPUT_DRY_RUN: ${{ inputs.dry_run && 'true' || 'false' }}\n  ALLOWED_ACTOR_IDS: ${{ vars.BACKPORT_ALLOWED_ACTOR_IDS || '59250993' }}\n",
-        "  validate:\n    if: github.repository == 'AleksanderGladkov/BCApps-Backport-Test' && github.repository_id == '1369849596' && github.ref == 'refs/heads/main'\n    runs-on: ubuntu-latest\n    timeout-minutes: 20\n    permissions:\n      contents: read\n      pull-requests: read\n",
-        "  track:\n    needs: validate\n    runs-on: ubuntu-latest\n    timeout-minutes: 15\n    permissions:\n      actions: read\n      contents: read\n      pull-requests: read\n      issues: write\n",
-        "  prepare:\n    needs: track\n    runs-on: ubuntu-latest\n    timeout-minutes: 20\n    permissions:\n      contents: read\n      pull-requests: read\n      issues: read\n",
-        "  publish:\n    needs: prepare\n    runs-on: ubuntu-latest\n    timeout-minutes: 20\n    permissions:\n      actions: read\n      contents: write\n      issues: write\n      pull-requests: write\n",
-        "      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4\n        with:\n          ref: ${{ github.sha }}\n          persist-credentials: false\n          sparse-checkout: .github/scripts/backport-demo\n",
-        "      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4\n        if: always()\n        with:\n          name: backport-plan-${{ github.run_attempt }}\n          path: ${{ runner.temp }}/backport-state\n          if-no-files-found: ignore\n          retention-days: 7\n",
-        "      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4\n        with:\n          name: backport-plan-${{ github.run_attempt }}\n          path: ${{ runner.temp }}/backport-state\n",
-        "      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4\n        if: always()\n        with:\n          name: backport-tracking-${{ github.run_attempt }}\n          path: ${{ runner.temp }}/backport-state\n          if-no-files-found: error\n          retention-days: 7\n",
-        "      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4\n        with:\n          name: backport-tracking-${{ github.run_attempt }}\n          path: ${{ runner.temp }}/backport-state\n",
-        "      - name: Save clean result or Milica's conflict handoff\n        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4\n        if: always()\n        with:\n          name: backport-result-${{ github.run_attempt }}\n          path: ${{ runner.temp }}/backport-state\n          if-no-files-found: error\n          retention-days: 7\n",
-        "      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4\n        with:\n          name: backport-result-${{ github.run_attempt }}\n          path: ${{ runner.temp }}/backport-state\n",
-        "      - name: Preserve publication and recovery evidence, including failures\n        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4\n        if: always()\n        with:\n          name: backport-publication-${{ github.run_attempt }}\n          path: ${{ runner.temp }}/backport-state\n          if-no-files-found: error\n          retention-days: 7\n"
-      ]
-    },
-    "tests": {
-      "path": ".github/workflows/backport-demo-tests.yml",
-      "sha256_lf": "2dbcc9f5ab13aa7d621852eed58cf6c83dd1200c5ce5dce5006c0de6dcff7af2",
-      "protected_blocks": [
-        "name: Backport executor tests\n",
-        "on:\n  workflow_dispatch:\n",
-        "permissions:\n  contents: read\n",
-        "      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4\n        with:\n          ref: ${{ github.sha }}\n          persist-credentials: false\n          sparse-checkout: .github/scripts/backport-demo\n"
-      ]
-    }
-  },
   "capture": {
     "TEST-021": {
       "failed": 0,
