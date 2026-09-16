@@ -2,7 +2,7 @@
 title: Label-triggered fork backports - execution plan
 date_created: 2026-09-16
 last_updated: 2026-09-16
-status: Prepared for scoped local implementation - L-001 pending
+status: L-001 DONE - L-002 and L-003 pending
 revision_notes: Approved self-contained execution copy. Retains the three local label epics, main-backed live policy and per-write checks. Internal workspace references are omitted; hosted actions remain separately approval-gated.
 ---
 
@@ -203,24 +203,36 @@ All tasks and acceptance criteria below are **TO DO** at preparation. No label o
 
 ### L-001: Add the label entry and normalized request
 
+**Status:** COMPLETE (local L-001 only)
+
 **Goal:** Feed an authorized exact post-merge label into the existing configuration while preserving manual dispatch.
 
 **Requirements:** R1-R3, R6. **Prerequisites:** Accepted PowerShell baseline and the execution preparation below; no independent integration or hosted evidence.
 
+**Restart guidance (2026-09-16):** Continue the existing uncommitted L-001 implementation rather than recreating it. The previous coder session reached its 3600-second limit while waiting for the full test runner; it did not complete review or an epic commit. Its six modified files are expected in-scope work, not an unrelated dirty baseline. The preparation commit and local ignore setup are already complete.
+
+**Owner testing constraint:** "Do not create and run a lot of tests - only necessary." Reuse existing tests and fixtures, add only necessary coverage for this epic's acceptance criteria, and avoid redundant parameterized cases or test-count targets. Start with one focused selection covering the changed behavior; do not overlap test processes or repeatedly run the full suite during development. Investigate the previous runner stall before another full run. Broaden coverage only when affected behavior or the existing acceptance gate requires it, and reuse valid results for unchanged code during review. Preserve the historical parity gates; focused results must not be reported as full acceptance.
+
 | Task ID | Type | Description | Files | Status |
 |---|---|---|---|---|
-| L1-1 | IMPL | Add strict event-file normalization, merged-main snapshot validation, numeric sender/original-actor checks and environment cross-checks at the current context boundary. Retain existing actor/source checks and sanitized errors. | `Backport.psm1`; `Invoke-Backport.ps1` only if its boundary needs adjustment | TO DO |
-| L1-2 | IMPL | Add the labeled trigger, event-aware input/title/concurrency expressions and trusted workflow-revision checkout. Wire existing validation success to the unchanged writer dependency path. Preserve manual defaults, action pins and least-privilege permissions. | `backport-demo.yml` | TO DO |
-| L1-3 | TEST | Add raw-event and actual-workflow cases LT-01 through LT-05. Extend existing helpers and update the runner's intentional label-workflow contract in this epic without replacing historical parity data. | `Backport.Tests.ps1`, `TestHelpers.ps1`, `Run-Tests.ps1` | TO DO |
+| L1-1 | IMPL | Add strict event-file normalization, merged-main snapshot validation, numeric sender/original-actor checks and environment cross-checks at the current context boundary. Retain existing actor/source checks and sanitized errors. | `Backport.psm1`; `Invoke-Backport.ps1` only if its boundary needs adjustment | DONE |
+| L1-2 | IMPL | Add the labeled trigger, event-aware input/title/concurrency expressions and trusted workflow-revision checkout. Wire existing validation success to the unchanged writer dependency path. Preserve manual defaults, action pins and least-privilege permissions. | `backport-demo.yml` | DONE |
+| L1-3 | TEST | Add raw-event and actual-workflow cases LT-01 through LT-05. Extend existing helpers and update the runner's intentional label-workflow contract in this epic without replacing historical parity data. | `Backport.Tests.ps1`, `TestHelpers.ps1`, `Run-Tests.ps1` | DONE |
 
 **Acceptance Criteria**
 
-- [ ] Exact authorized merged-main label input normalizes to the intended source and `dry_run=false`; manual true/default/false behavior is unchanged.
-- [ ] Invalid event, label, source, actor, repository or trust metadata cannot reach a writer; later merge/rerun cannot authorize an originally pre-merge event.
-- [ ] Accepted manual/label requests use the same source/target group; the actual title, input, checkout and dependency blocks are covered.
-- [ ] The existing test entry accepts the intentional feature workflow only through explicit assertions, not by disabling its baseline checks.
+- [x] Exact authorized merged-main label input normalizes to the intended source and `dry_run=false`; manual true/default/false behavior is unchanged.
+- [x] Invalid event, label, source, actor, repository or trust metadata cannot reach a writer; later merge/rerun cannot authorize an originally pre-merge event.
+- [x] Accepted manual/label requests use the same source/target group; the actual title, input, checkout and dependency blocks are covered.
+- [x] The existing test entry accepts the intentional feature workflow only through explicit assertions, not by disabling its baseline checks.
 
 This epic establishes event/actor admission, not completed label publication. The manual-only history assumptions and live-policy enforcement are addressed in L-002 before feature completion or deployment.
+
+**Local completion (2026-09-16):** Continued the inherited six-file implementation without adding more cases. The private context helper reuses strict JSON, ordinal literal, repository and numeric identity helpers; the CLI and authoritative remote checks remain unchanged. The runner reverses only explicitly asserted label-workflow edits before enforcing the historical hashes and protected blocks. `compat.json` and `parity.json` remain unchanged.
+
+**Restart investigation:** The previous retained full result completed in 1616.54 seconds with 23 `uncaptured_stage_reference_input` failures; its subsequent run exceeded the coder session limit without a completed result. No orphaned test runner remained. The inherited manual-only reference adapter already addressed those input-shape failures without recapturing historical data; no runner deadlock was established.
+
+**Executed results:** On Windows, PowerShell 7.6.6, .NET 10.0.12 and Pester 5.7.1, the existing `Run-Tests.ps1 -Epic L-001` selection passed 70 selected cases in 177.93 seconds (development only). One subsequent, non-overlapping unfiltered `Run-Tests.ps1` run passed all 480 cases in 1823.48 seconds, with zero failures, skips or unexecuted cases. The acceptance gate retained 67/67 baseline cases, 12/12 migration IDs and LT-01 through LT-05. XML results and the full progress log are retained outside the repository as `l001-focused.xml`, `l001-full.xml` and `l001-full.log`. Workflow expressions were checked by the scoped local fixture, not GitHub's runtime evaluator. No hosted mutation, deployment, L-002 or L-003 completion is claimed.
 
 ### L-002: Connect labels to existing stages, history and live policy
 
@@ -316,12 +328,15 @@ The single live policy is the only new production configuration file; no new sta
 4. Run the packaged `conductor-sdd-runtime` prerequisite step once per session. Start a fresh **L-001-only** run rather than resuming a stopped checkpoint. L-002 and L-003 can follow as scoped runs after their preceding epics.
 5. Use the existing unmodified installed `octane-workflow-implement\assets\implement.yaml`. Run Conductor in a foreground terminal from this repository root with `--quiet run --workspace-instructions`, the absolute workflow and execution-plan paths, `--input epic="L-001"` and `--web-bg`. Share the returned dashboard URL and stop watching. Do not replace the runtime, edit templates or implement a custom blocked-result exit.
 
+For the owner-requested restart after the first run's timeout, preserve the existing six in-scope modified files and continue L-001 from them. The initial clean-worktree preparation requirement was satisfied before that run; do not discard or prematurely commit its unfinished implementation to make the restart clean. Keep abandoned test fixtures outside the repository and out of epic commits. Apply the L-001 testing constraint above throughout coding, review and fixes.
+
 The stock `epic_diff` captures `git status --porcelain`, not a before/after baseline. Its reviewer may treat pre-existing dirty files as epic work, and its committer says to stage all modified files including the plan. Its coder has no dedicated blocked-result exit. Prepared scope and clean working-tree state reduce these risks; this plan does not claim that the unchanged runner automatically excludes unrelated changes or guarantees termination of blocked review loops. Stop for owner guidance if unrelated work appears.
 
-Every preparation/epic/fix commit must include this trailer:
+Every epic/fix commit in this orchestration session must include these trailers:
 
 ```text
 Co-authored-by: Copilot <223556219+Copilot@users.noreply.github.com>
+Copilot-Session: 6159a05f-2cf0-45d4-86b2-05355fe954c6
 ```
 
 No push is authorized by a local commit. For an epic-scoped run, restrict implementation, review and fixes to the selected epic and necessary compatibility; do not implement the remaining epics prematurely.

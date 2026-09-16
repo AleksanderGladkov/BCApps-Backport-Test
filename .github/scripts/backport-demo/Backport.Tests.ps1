@@ -26,6 +26,9 @@ BeforeAll {
         }) + @($parity.required_migration_ids | ForEach-Object {
             [pscustomobject]@{ Name = "synthetic migration $_"; Tag = @($_); Result = 'Passed'; Executed = $true }
         })
+        $tests = $tests[0..66] + @(1..5 | ForEach-Object {
+            [pscustomobject]@{ Name = "synthetic label $_"; Tag = @('LT-{0:d2}' -f $_); Result = 'Passed'; Executed = $true }
+        }) + $tests[67..($tests.Count - 1)]
         [pscustomobject]@{
             Result = 'Passed'; Tests = $tests; TotalCount = $tests.Count
             PassedCount = $tests.Count; FailedCount = 0; SkippedCount = 0; NotRunCount = 0
@@ -69,6 +72,244 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
     }
     AfterEach {
         Remove-LocalGitFixture $script:T.Fixture
+    }
+    It 'normalizes the raw merged-main label into the existing validated binding' -Tag 'L-001', 'LT-01' {
+        $T.Environment.GITHUB_EVENT_NAME = 'pull_request_target'
+        Set-BackportTestEventFile $T.Environment (New-BackportLabelTestEvent $T)
+        $T.Environment.GITHUB_OUTPUT = Join-Path $T.Fixture.Root 'outputs'
+        Set-BackportStageConfig $T
+        $T.Config.source_pr | Should -Be 7
+        $T.Config.source_pr | Should -BeOfType int
+        $T.Config.dry_run | Should -BeFalse
+        (Invoke-BackportTestStage $T validate).source_sha | Should -BeExactly $T.Fixture.Source
+        (Get-StageJson $T).dry_run | Should -BeFalse
+        [IO.File]::ReadAllText($T.Environment.GITHUB_OUTPUT).Replace("`r`n", "`n") | Should -BeExactly "plan_ready=true`n"
+        @($T.Api.calls | Where-Object method -CNE 'GET').Count | Should -Be 0
+    }
+    It 'rejects missing or conflicting label projections <Key>=<Value>' -Tag 'L-001', 'LT-01' -ForEach @(
+        @{ Key = 'INPUT_SOURCE_PR'; Value = $null }, @{ Key = 'INPUT_SOURCE_PR'; Value = '8' }
+        @{ Key = 'INPUT_SOURCE_PR'; Value = '07' }, @{ Key = 'INPUT_DRY_RUN'; Value = $null }
+        @{ Key = 'INPUT_DRY_RUN'; Value = 'true' }, @{ Key = 'INPUT_DRY_RUN'; Value = 'False' }
+    ) {
+        $T.Environment.GITHUB_EVENT_NAME = 'pull_request_target'
+        Set-BackportTestEventFile $T.Environment (New-BackportLabelTestEvent $T)
+        $T.Environment[$Key] = $Value
+        Assert-BackportRequestRejected $T
+    }
+    It 'keeps explicit manual <Dry> semantics through all existing stages' -Tag 'L-001', 'LT-02' -ForEach @(
+        @{ Dry = 'true' }, @{ Dry = 'false' }
+    ) {
+        $T.Environment.INPUT_DRY_RUN = $Dry
+        Set-BackportStageConfig $T
+        $T.Config.dry_run | Should -Be ($Dry -ceq 'true')
+        $result = Invoke-BackportTestStages $T -Last publish
+        if ($Dry -ceq 'true') {
+            $result.status | Should -BeExactly 'dry-run'
+            @($T.Api.calls | Where-Object method -CNE 'GET').Count | Should -Be 0
+            $T.Pushes.Count | Should -Be 0
+        }
+        else {
+            $result.status | Should -BeExactly 'pr-created'
+            $T.Api.pulls.Count | Should -Be 1
+        }
+    }
+    It 'rejects malformed manual raw inputs and projection disagreements' -Tag 'L-001', 'LT-02' {
+        $original = Copy-BackportTestValue $T.Environment
+        foreach ($key in @('source_pr', 'dry_run')) {
+            $values = if ($key -ceq 'source_pr') { @($null, '', '0', '07', '-7', '2147483648', "7`n", '７', '7;echo', 7, '8') }
+                else { @($null, '', 'True', '0', "false`n", $false, 'true') }
+            foreach ($value in $values) {
+                $T.Environment = Copy-BackportTestValue $original
+                $event = [IO.File]::ReadAllText($original.GITHUB_EVENT_PATH) | ConvertFrom-Json -AsHashtable
+                $event.inputs = @{ source_pr = '7'; dry_run = 'false' }
+                $event.inputs[$key] = $value
+                Set-BackportTestEventFile $T.Environment $event
+                Assert-BackportRequestRejected $T
+            }
+        }
+        Set-BackportDispatchTestEvent $original
+        $T.Environment = Copy-BackportTestValue $original
+        $T.Environment.Remove('INPUT_DRY_RUN')
+        Assert-BackportRequestRejected $T
+    }
+    It 'rejects ineligible label snapshots before every stage: <Case>' -Tag 'L-001', 'LT-03' -ForEach @(
+        @{ Case = 'wrong label'; Edit = { param($e) $e.label.name = 'other' } }
+        @{ Case = 'case variant'; Edit = { param($e) $e.label.name = 'Backport:29.x' } }
+        @{ Case = 'whitespace'; Edit = { param($e) $e.label.name += ' ' } }
+        @{ Case = 'ordinal invisible'; Edit = { param($e) $e.label.name += "`u{ad}" } }
+        @{ Case = 'missing label'; Edit = { param($e) $e.Remove('label') } }
+        @{ Case = 'unlabeled'; Edit = { param($e) $e.action = 'unlabeled' } }
+        @{ Case = 'closed action'; Edit = { param($e) $e.action = 'closed' } }
+        @{ Case = 'action case'; Edit = { param($e) $e.action = 'Labeled' } }
+        @{ Case = 'wrong repository'; Edit = { param($e) $e.repository.full_name = 'microsoft/BCApps' } }
+        @{ Case = 'wrong repository ID'; Edit = { param($e) $e.repository.id = 1 } }
+        @{ Case = 'string repository ID'; Edit = { param($e) $e.repository.id = '1369849596' } }
+        @{ Case = 'wrong base repository'; Edit = { param($e) $e.pull_request.base.repo.id = 1 } }
+        @{ Case = 'wrong base name'; Edit = { param($e) $e.pull_request.base.repo.full_name = 'evil/fork' } }
+        @{ Case = 'wrong base'; Edit = { param($e) $e.pull_request.base.ref = 'releases/29.x' } }
+        @{ Case = 'base case'; Edit = { param($e) $e.pull_request.base.ref = 'Main' } }
+        @{ Case = 'open pre-merge'; Edit = { param($e) $e.pull_request.merged = $false; $e.pull_request.state = 'open' } }
+        @{ Case = 'closed unmerged'; Edit = { param($e) $e.pull_request.merged = $false } }
+        @{ Case = 'conflicting state'; Edit = { param($e) $e.pull_request.state = 'open' } }
+        @{ Case = 'string merged'; Edit = { param($e) $e.pull_request.merged = 'true' } }
+        @{ Case = 'missing merged'; Edit = { param($e) $e.pull_request.Remove('merged') } }
+        @{ Case = 'conflicting number'; Edit = { param($e) $e.number = 8 } }
+        @{ Case = 'missing number'; Edit = { param($e) $e.Remove('number') } }
+        @{ Case = 'string number'; Edit = { param($e) $e.pull_request.number = '7' } }
+        @{ Case = 'boolean number'; Edit = { param($e) $e.pull_request.number = $true } }
+        @{ Case = 'zero number'; Edit = { param($e) $e.number = $e.pull_request.number = 0 } }
+        @{ Case = 'oversized number'; Edit = { param($e) $e.number = $e.pull_request.number = 2147483648 } }
+    ) {
+        $T.Environment.GITHUB_EVENT_NAME = 'pull_request_target'
+        $event = New-BackportLabelTestEvent $T
+        & $Edit $event
+        Set-BackportTestEventFile $T.Environment $event
+        # The live PR is already merged. Neither processing later nor rerunning changes the event snapshot.
+        $T.Api.source.merged | Should -BeTrue
+        foreach ($attempt in @('1', '2')) {
+            $T.Environment.GITHUB_RUN_ATTEMPT = $attempt
+            Assert-BackportRequestRejected $T
+        }
+    }
+    It 'rejects untrusted platform metadata <Key>=<Value>' -Tag 'L-001', 'LT-03', 'LT-05' -ForEach @(
+        @{ Key = 'GITHUB_EVENT_NAME'; Value = '' }, @{ Key = 'GITHUB_EVENT_NAME'; Value = 'pull_request' }
+        @{ Key = 'GITHUB_EVENT_NAME'; Value = 'Pull_request_target' }, @{ Key = 'GITHUB_EVENT_NAME'; Value = 'workflow_run' }
+        @{ Key = 'GITHUB_EVENT_PATH'; Value = '' }, @{ Key = 'GITHUB_REF'; Value = 'refs/pull/7/merge' }
+        @{ Key = 'GITHUB_WORKFLOW_REF'; Value = '' }
+        @{ Key = 'GITHUB_WORKFLOW_REF'; Value = 'evil/fork/.github/workflows/backport-demo.yml@refs/heads/main' }
+        @{ Key = 'GITHUB_WORKFLOW_REF'; Value = 'AleksanderGladkov/BCApps-Backport-Test/.github/workflows/backport-demo.yml@refs/heads/feature' }
+        @{ Key = 'GITHUB_WORKFLOW_SHA'; Value = '' }, @{ Key = 'GITHUB_WORKFLOW_SHA'; Value = 'main' }
+        @{ Key = 'GITHUB_WORKFLOW_SHA'; Value = ('A' * 40) }
+    ) {
+        foreach ($eventName in @('workflow_dispatch', 'pull_request_target')) {
+            $T.Environment.GITHUB_EVENT_NAME = $eventName
+            Set-BackportTestEventFile $T.Environment (New-BackportLabelTestEvent $T) (Join-Path $T.Fixture.Root 'event.json')
+            if ($eventName -ceq 'workflow_dispatch') { Set-BackportDispatchTestEvent $T.Environment }
+            $T.Environment[$Key] = $Value
+            Assert-BackportRequestRejected $T
+        }
+    }
+    It 'rejects malformed raw event JSON without echoing payload data' -Tag 'L-001', 'LT-01', 'LT-03' {
+        $T.Environment.GITHUB_EVENT_NAME = 'pull_request_target'
+        $rawEvent = ConvertTo-Json -InputObject (New-BackportLabelTestEvent $T) -Depth 100 -Compress
+        foreach ($raw in @('{"secret":', 'null', '[]', '{"action":"labeled","action":"labeled"}',
+            $rawEvent.Replace('"id":59250993', '"id":59250993.0'),
+            $rawEvent.Replace('"number":7', '"number":7e0'),
+            $rawEvent.Replace('"id":1369849596', '"id":1369849596.0'),
+            $rawEvent.Replace('"name":"backport:29.x"', '"Name":"backport:29.x"'))) {
+            [IO.File]::WriteAllText($T.Environment.GITHUB_EVENT_PATH, $raw)
+            Assert-BackportRequestRejected $T
+        }
+        [IO.File]::WriteAllBytes($T.Environment.GITHUB_EVENT_PATH, [byte[]]@(255, 254, 123, 125))
+        Assert-BackportRequestRejected $T
+        [IO.File]::WriteAllBytes($T.Environment.GITHUB_EVENT_PATH, [byte[]]::new(5MB + 1))
+        Assert-BackportRequestRejected $T
+        [IO.File]::Delete($T.Environment.GITHUB_EVENT_PATH)
+        Assert-BackportRequestRejected $T
+    }
+    It 'rejects raw label admission through the actual sanitized four-stage CLI' -Tag 'L-001', 'LT-03' {
+        $T.Environment.GITHUB_EVENT_NAME = 'pull_request_target'
+        $event = New-BackportLabelTestEvent $T
+        $event.label.name = "secret-label`n::error::injected"
+        Set-BackportTestEventFile $T.Environment $event
+        foreach ($stage in @('validate', 'track', 'prepare', 'publish')) {
+            $info = [Diagnostics.ProcessStartInfo]::new((Get-Process -Id $PID).Path)
+            foreach ($arg in @('-NoProfile', '-File', (Join-Path $PSScriptRoot 'Invoke-Backport.ps1'), '-Stage', $stage)) {
+                $info.ArgumentList.Add($arg)
+            }
+            foreach ($key in $T.Environment.Keys) { $info.Environment[$key] = $T.Environment[$key] }
+            $info.UseShellExecute = $false
+            $info.RedirectStandardOutput = $info.RedirectStandardError = $true
+            $process = [Diagnostics.Process]::Start($info)
+            try {
+                $out = $process.StandardOutput.ReadToEndAsync()
+                $err = $process.StandardError.ReadToEndAsync()
+                $process.WaitForExit()
+                $process.ExitCode | Should -Be 1
+                $out.Result | Should -BeExactly ''
+                $err.Result.TrimEnd("`r", "`n") | Should -BeExactly 'backport_failed: invalid_label_event'
+            }
+            finally { $process.Dispose() }
+        }
+        Test-Path -LiteralPath $T.Environment.RUNNER_TEMP | Should -BeFalse
+    }
+    It 'retains canonical source limits and main dispatch ref spellings' -Tag 'L-001', 'LT-01', 'LT-02' {
+        foreach ($source in @('1', '2147483647')) {
+            $T.Environment.INPUT_SOURCE_PR = $source
+            foreach ($ref in @('main', 'refs/heads/main')) {
+                Set-BackportDispatchTestEvent $T.Environment
+                $event = [IO.File]::ReadAllText($T.Environment.GITHUB_EVENT_PATH) | ConvertFrom-Json -AsHashtable
+                $event.ref = $ref
+                Set-BackportTestEventFile $T.Environment $event
+                (& $T.Module { param($e) New-BackportContext -Environment $e } $T.Environment).source_pr | Should -Be ([int]$source)
+            }
+            $T.Environment.GITHUB_EVENT_NAME = 'pull_request_target'
+            $event = New-BackportLabelTestEvent $T
+            $event.number = $event.pull_request.number = [int]$source
+            Set-BackportTestEventFile $T.Environment $event
+            (& $T.Module { param($e) New-BackportContext -Environment $e } $T.Environment).source_pr | Should -Be ([int]$source)
+            $T.Environment.GITHUB_EVENT_NAME = 'workflow_dispatch'
+        }
+    }
+    It 'retains manual raw repository and ref checks before writers' -Tag 'L-001', 'LT-02', 'LT-03' {
+        foreach ($edit in @(
+            { param($e) $e.repository.id = 1 }, { param($e) $e.repository.full_name = 'microsoft/BCApps' }
+            { param($e) $e.Remove('repository') }, { param($e) $e.ref = 'refs/heads/feature' }
+            { param($e) $e.Remove('inputs') }, { param($e) $e.ref = 'Main' }
+        )) {
+            Set-BackportDispatchTestEvent $T.Environment
+            $event = [IO.File]::ReadAllText($T.Environment.GITHUB_EVENT_PATH) | ConvertFrom-Json -AsHashtable
+            & $edit $event
+            Set-BackportTestEventFile $T.Environment $event
+            Assert-BackportRequestRejected $T
+        }
+    }
+    It 'adapts only admitted manual requests to the frozen historical input shape' -Tag 'L-001', 'LT-02' {
+        $input = Get-BackportReferenceInput $T @('validate')
+        foreach ($key in @('GITHUB_EVENT_NAME', 'GITHUB_EVENT_PATH', 'GITHUB_WORKFLOW_REF', 'GITHUB_WORKFLOW_SHA')) {
+            $input.environment.ContainsKey($key) | Should -BeFalse
+        }
+        $T.Environment.GITHUB_WORKFLOW_SHA = 'untrusted'
+        { Get-BackportReferenceInput $T @('validate') } | Should -Throw
+        $T.Environment.GITHUB_WORKFLOW_SHA = 'a' * 40
+        $T.Environment.GITHUB_EVENT_NAME = 'pull_request_target'
+        Set-BackportTestEventFile $T.Environment (New-BackportLabelTestEvent $T)
+        { Get-BackportReferenceInput $T @('validate') } | Should -Throw -ExpectedMessage 'label_not_historical_reference'
+    }
+    It 'requires an allowed numeric sender matching the original actor: <Sender>' -Tag 'L-001', 'LT-04' -ForEach @(
+        @{ Sender = $null }, @{ Sender = '59250993' }, @{ Sender = $true }, @{ Sender = 0 }, @{ Sender = 12 }
+    ) {
+        $T.Environment.GITHUB_EVENT_NAME = 'pull_request_target'
+        $T.Environment.ALLOWED_ACTOR_IDS = '59250993,12'
+        $event = New-BackportLabelTestEvent $T
+        $event.sender.id = $Sender
+        Set-BackportTestEventFile $T.Environment $event
+        Assert-BackportRequestRejected $T
+    }
+    It 'cannot authorize an originally disallowed sender through an allowed rerunner' -Tag 'L-001', 'LT-04' {
+        $T.Environment.GITHUB_EVENT_NAME = 'pull_request_target'
+        $T.Environment.GITHUB_ACTOR_ID = '12'
+        $T.Environment.GITHUB_RUN_ATTEMPT = '2'
+        $event = New-BackportLabelTestEvent $T
+        $event.sender.id = 12
+        Set-BackportTestEventFile $T.Environment $event
+        Assert-BackportRequestRejected $T
+    }
+    It 'retains authoritative current-user IDs for label reruns: <Current>' -Tag 'L-001', 'LT-04' -ForEach @(
+        @{ Current = 59250993; Allowed = $true }, @{ Current = 12; Allowed = $true }
+        @{ Current = 13; Allowed = $false }, @{ Current = '59250993'; Allowed = $false }
+        @{ Current = $true; Allowed = $false }
+    ) {
+        $T.Environment.GITHUB_EVENT_NAME = 'pull_request_target'
+        $T.Environment.ALLOWED_ACTOR_IDS = '59250993,12'
+        $T.Environment.GITHUB_RUN_ATTEMPT = '2'
+        Set-BackportTestEventFile $T.Environment (New-BackportLabelTestEvent $T)
+        Set-BackportStageConfig $T
+        $T.Api.actor = $Current
+        if ($Allowed) { (Invoke-BackportTestStage $T validate).source_pr | Should -Be 7 }
+        else { { Invoke-BackportTestStage $T validate } | Should -Throw -ExpectedMessage 'triggering_actor_not_allowed' }
+        @($T.Api.calls | Where-Object method -CNE 'GET').Count | Should -Be 0
+        $T.Pushes.Count | Should -Be 0
     }
     It 'test_two_commit_fast_forward_cannot_drop_first_same_file_edit' {
         Assert-StagePartialSourceRejected $T 'fast-forward'
@@ -1275,6 +1516,77 @@ Describe 'Baseline stages with real owned Git and fake HTTP' -Tag 'EPIC-003' {
     }
 }
 
+Describe 'Label workflow admission contract' -Tag 'L-001', 'LT-05' {
+    BeforeAll {
+        $workflows = if ($env:BACKPORT_TEST_WORKFLOW_DIR) { $env:BACKPORT_TEST_WORKFLOW_DIR } else {
+            [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..\..\workflows'))
+        }
+        $production = [IO.File]::ReadAllText((Join-Path $workflows 'backport-demo.yml')).Replace("`r`n", "`n")
+        $testsWorkflow = [IO.File]::ReadAllText((Join-Path $workflows 'backport-demo-tests.yml')).Replace("`r`n", "`n")
+        $repo = @{ id = 1369849596; full_name = 'AleksanderGladkov/BCApps-Backport-Test' }
+        $labelEvent = @{
+            action = 'labeled'; label = @{ name = 'backport:29.x' }; repository = $repo; number = 7
+            pull_request = @{ number = 7; merged = $true; state = 'closed'; base = @{ ref = 'main'; repo = $repo } }
+        }
+    }
+    It 'uses the actual title and inputs with manual <Mode> and the shared source-target group' -ForEach @(
+        @{ Mode = 'default'; Dry = $null; Expected = 'true' }
+        @{ Mode = 'true'; Dry = $true; Expected = 'true' }
+        @{ Mode = 'false'; Dry = $false; Expected = 'false' }
+    ) {
+        $manual = Get-BackportWorkflowTestProjection $production workflow_dispatch $null -Dry $Dry
+        $label = Get-BackportWorkflowTestProjection $production pull_request_target $labelEvent -Dry $true
+        $manual.source | Should -BeExactly '7'
+        $manual.dry | Should -BeExactly $Expected
+        $manual.title | Should -BeExactly "Backport PR 7 to 29.x (dry run = $Expected)"
+        $label.title | Should -BeExactly 'Backport PR 7 to 29.x (dry run = false)'
+        $label.dry | Should -BeExactly 'false'
+        $manual.group | Should -BeExactly 'backport-demo-1369849596-7-29'
+        $label.group | Should -BeExactly $manual.group
+        $production | Should -Not -Match 'fromJSON'
+    }
+    It 'isolates obvious rejected candidates but leaves case-insensitive equality to the ordinal controller' {
+        foreach ($edit in @(
+            { param($e) $e.label.name = 'other' }, { param($e) $e.pull_request.merged = $false }
+            { param($e) $e.pull_request.base.ref = 'other' }, { param($e) $e.repository.id = 1 }
+            { param($e) $e.action = 'unlabeled' }, { param($e) $e.number = 8 }
+        )) {
+            $event = Copy-BackportTestValue $labelEvent
+            & $edit $event
+            (Get-BackportWorkflowTestProjection $production pull_request_target $event).group |
+                Should -BeExactly 'backport-demo-1369849596-rejected-123-29'
+        }
+        $event = Copy-BackportTestValue $labelEvent
+        $event.label.name = 'Backport:29.x'
+        (Get-BackportWorkflowTestProjection $production pull_request_target $event).group |
+            Should -BeExactly 'backport-demo-1369849596-7-29'
+    }
+    It 'admits only the explicit feature edits while preserving the historical baseline gate' {
+        Assert-BackportWorkflowBaseline $script:Reference $production $testsWorkflow
+        foreach ($edit in Get-BackportLabelWorkflowEdits) {
+            [regex]::Matches($production, [regex]::Escape($edit.After)).Count | Should -Be $edit.Count
+            $weakened = [regex]::new([regex]::Escape($edit.After)).Replace($production, $edit.Before, 1)
+            { Assert-BackportWorkflowBaseline $script:Reference $weakened $testsWorkflow } | Should -Throw 'workflow_baseline_mismatch'
+        }
+        $production | Should -Match '(?m)^  pull_request_target:\n    types: \[labeled\]\n    branches: \[main\]$'
+        $production | Should -Match '(?m)^    outputs:\n      plan_ready: \$\{\{ steps.validate.outputs.plan_ready \}\}$'
+        $production | Should -Match '(?m)^      - name: Validate requester, source history and target\n        id: validate$'
+        $production | Should -Match '(?m)^  track:\n    needs: validate\n    if: needs.validate.outputs.plan_ready == ''true''$'
+        $production | Should -Match '(?m)^  prepare:\n    needs: track$'
+        $production | Should -Match '(?m)^  publish:\n    needs: prepare$'
+        [regex]::Matches($production, 'ref: \$\{\{ github.workflow_sha \}\}\n          persist-credentials: false\n          sparse-checkout: .github/scripts/backport-demo').Count | Should -Be 4
+    }
+    It 'requires LT-01 through LT-05 in full acceptance without changing parity history' {
+        foreach ($id in 1..5) {
+            $result = New-SyntheticResult
+            $tag = 'LT-{0:d2}' -f $id
+            $result.Tests = @($result.Tests | Where-Object { $_.Tag -cnotcontains $tag })
+            $result.TotalCount = $result.PassedCount = $result.Tests.Count
+            (Test-BackportAcceptance $result (New-SyntheticParity)).Errors -join ';' | Should -Match $tag
+        }
+    }
+}
+
 Describe 'Offline workflow baseline and EPIC-003 runner selection' -Tag 'EPIC-003' {
     BeforeAll {
         $workflows = if ($env:BACKPORT_TEST_WORKFLOW_DIR) { $env:BACKPORT_TEST_WORKFLOW_DIR } else {
@@ -1290,6 +1602,7 @@ Describe 'Offline workflow baseline and EPIC-003 runner selection' -Tag 'EPIC-00
             'actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4' = 'actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1'
         }
         $script:HistoricalWorkflowTexts = Copy-BackportTestValue $script:WorkflowTexts
+        $script:HistoricalWorkflowTexts.production = ConvertFrom-BackportLabelWorkflow $script:HistoricalWorkflowTexts.production
         foreach ($kind in @('production', 'tests')) {
             foreach ($oldPin in $script:ActionPinUpdates.Keys) {
                 $script:HistoricalWorkflowTexts[$kind] = $script:HistoricalWorkflowTexts[$kind].Replace($script:ActionPinUpdates[$oldPin], $oldPin)
@@ -1576,6 +1889,9 @@ Describe 'Offline workflow baseline and EPIC-003 runner selection' -Tag 'EPIC-00
                 foreach ($oldPin in $script:ActionPinUpdates.Keys) {
                     $protected = $protected.Replace($oldPin, $script:ActionPinUpdates[$oldPin])
                 }
+                if ($kind -ceq 'production') {
+                    foreach ($edit in Get-BackportLabelWorkflowEdits) { $protected = $protected.Replace($edit.Before, $edit.After) }
+                }
                 $texts[$kind].Contains($protected, [StringComparison]::Ordinal) | Should -BeTrue
                 $texts[$kind] = $texts[$kind].Replace($protected, '')
                 { Assert-BackportWorkflowBaseline -Parity $script:Reference `
@@ -1609,14 +1925,19 @@ Describe 'Configuration and safe CLI compatibility' -Tag 'EPIC-002', 'TEST-020' 
         Import-Module (Join-Path $PSScriptRoot 'Backport.psm1') -Force
         $script:Core = Get-Module Backport
         function New-CoreEnvironment {
-            @{
+            $environment = @{
                 GITHUB_REPOSITORY = 'AleksanderGladkov/BCApps-Backport-Test'
                 GITHUB_REPOSITORY_ID = '1369849596'; GITHUB_REF = 'refs/heads/main'
+                GITHUB_EVENT_NAME = 'workflow_dispatch'
+                GITHUB_WORKFLOW_REF = 'AleksanderGladkov/BCApps-Backport-Test/.github/workflows/backport-demo.yml@refs/heads/main'
+                GITHUB_WORKFLOW_SHA = ('a' * 40)
                 GITHUB_ACTOR_ID = '59250993'; GITHUB_TRIGGERING_ACTOR = 'AleksanderGladkov'
                 GITHUB_RUN_ID = '123'; GITHUB_RUN_ATTEMPT = '1'
                 INPUT_SOURCE_PR = '7'; INPUT_DRY_RUN = 'false'
                 GH_TOKEN = 'synthetic-secret'; RUNNER_TEMP = $script:HarnessRoot
             }
+            Set-BackportDispatchTestEvent $environment (Join-Path $script:HarnessRoot 'core-event.json')
+            $environment
         }
     }
     It 'imports without reading credentials or running a command' {

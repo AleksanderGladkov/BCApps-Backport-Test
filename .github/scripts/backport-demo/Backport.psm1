@@ -274,11 +274,70 @@ function Get-BackportToken {
     $token
 }
 
+function Get-BackportRequest {
+    param($Environment, $Actor, $Allowed)
+    $dry = $Environment['INPUT_DRY_RUN']
+    if (-not (Test-BackportLiteral $dry @('true', 'false'))) { throw 'invalid_dry_run' }
+    $source = ConvertTo-BackportPositive $Environment['INPUT_SOURCE_PR'] 2147483648
+    $eventName = $Environment['GITHUB_EVENT_NAME']
+    if (-not (Test-BackportLiteral $eventName @('workflow_dispatch', 'pull_request_target'))) { throw 'unsupported_event' }
+    $path = $Environment['GITHUB_EVENT_PATH']
+    if (-not $path) { throw 'invalid_event_file' }
+    try {
+        Assert-BackportRegularFile $path
+        $stream = [IO.File]::Open($path, [IO.FileMode]::Open, [IO.FileAccess]::Read, [IO.FileShare]::Read)
+        try {
+            if ($stream.Length -gt 5MB) { throw 'invalid_event_file' }
+            $bytes = [byte[]]::new([int]$stream.Length)
+            $stream.ReadExactly($bytes, 0, $bytes.Length)
+        }
+        finally { $stream.Dispose() }
+        $event = ConvertFrom-BackportJsonBytes $bytes
+    }
+    catch [IO.IOException] { throw 'invalid_event_file' }
+    catch [UnauthorizedAccessException] { throw 'invalid_event_file' }
+    Assert-BackportRepository (Get-BackportField $event 'repository')
+    if (Test-BackportLiteral $eventName @('workflow_dispatch')) {
+        if (-not (Test-BackportLiteral (Get-BackportField $event 'ref') @('main', 'refs/heads/main'))) {
+            throw 'wrong_execution_ref'
+        }
+        $inputs = Get-BackportObjectField $event 'inputs'
+        $requestSource = ConvertTo-BackportPositive (Get-BackportField $inputs 'source_pr') 2147483648
+        $requestDry = Get-BackportField $inputs 'dry_run'
+        if (-not (Test-BackportLiteral $requestDry @('true', 'false'))) { throw 'invalid_dry_run' }
+    }
+    else {
+        if (-not (Test-BackportLiteral (Get-BackportField $event 'action') @('labeled')) -or
+            -not (Test-BackportLiteral (Get-BackportField (Get-BackportObjectField $event 'label') 'name') @('backport:29.x'))) {
+            throw 'invalid_label_event'
+        }
+        $pr = Get-BackportObjectField $event 'pull_request'
+        $requestSource = Get-BackportField $pr 'number'
+        $number = Get-BackportField $event 'number'
+        if (-not (Test-BackportInteger $requestSource) -or $requestSource -le 0 -or $requestSource -ge 2147483648 -or
+            -not (Test-BackportInteger $number) -or $number -ne $requestSource) { throw 'invalid_number' }
+        # Admission uses the original snapshot, never a later merge observed through the API.
+        $merged = Get-BackportField $pr 'merged'
+        if ($merged -isnot [bool] -or -not $merged -or
+            -not (Test-BackportLiteral (Get-BackportField $pr 'state') @('closed'))) { throw 'source_not_merged' }
+        $base = Get-BackportObjectField $pr 'base'
+        Assert-BackportRepository (Get-BackportField $base 'repo')
+        if (-not (Test-BackportLiteral (Get-BackportField $base 'ref') @('main'))) { throw 'source_wrong_base' }
+        $sender = Get-BackportField (Get-BackportObjectField $event 'sender') 'id'
+        if (-not (Test-BackportInteger $sender) -or $sender -le 0 -or $sender -ne $Actor -or
+            $Allowed -notcontains $sender) { throw 'sender_not_allowed' }
+        $requestDry = 'false'
+    }
+    if ($requestSource -ne $source -or -not (Test-BackportLiteral $dry @($requestDry))) { throw 'request_projection_mismatch' }
+    return @{ source_pr = [int]$requestSource; dry_run = (Test-BackportLiteral $requestDry @('true')) }
+}
+
 function New-BackportContext {
     param([AllowNull()][Collections.IDictionary]$Environment = $null)
     $envMap = New-BackportDictionary
     foreach ($key in @('GITHUB_REPOSITORY', 'GITHUB_REPOSITORY_ID', 'GITHUB_REF', 'GITHUB_ACTOR_ID',
         'GITHUB_TRIGGERING_ACTOR', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'INPUT_SOURCE_PR', 'INPUT_DRY_RUN',
+        'GITHUB_EVENT_NAME', 'GITHUB_EVENT_PATH', 'GITHUB_WORKFLOW_REF', 'GITHUB_WORKFLOW_SHA',
         'ALLOWED_ACTOR_IDS', 'RUNNER_TEMP', 'STATE_DIR', 'WORK_DIR', 'GITHUB_OUTPUT', 'GITHUB_STEP_SUMMARY', 'GITHUB_SUMMARY')) {
         $value = if ($null -eq $Environment) { [Environment]::GetEnvironmentVariable($key) } else { $Environment[$key] }
         if ($null -ne $value) { $envMap.Add($key, [string]$value) }
@@ -286,6 +345,10 @@ function New-BackportContext {
     if (-not (Test-BackportLiteral $envMap['GITHUB_REPOSITORY'] @('AleksanderGladkov/BCApps-Backport-Test'))) { throw 'wrong_repository' }
     if (-not (Test-BackportLiteral $envMap['GITHUB_REPOSITORY_ID'] @('1369849596'))) { throw 'wrong_repository_id' }
     if (-not (Test-BackportLiteral $envMap['GITHUB_REF'] @('refs/heads/main'))) { throw 'wrong_execution_ref' }
+    if (-not (Test-BackportLiteral $envMap['GITHUB_WORKFLOW_REF'] @(
+        'AleksanderGladkov/BCApps-Backport-Test/.github/workflows/backport-demo.yml@refs/heads/main'
+    ))) { throw 'wrong_workflow_ref' }
+    $null = Assert-BackportSha $envMap['GITHUB_WORKFLOW_SHA']
     $rawAllowed = if ($envMap.ContainsKey('ALLOWED_ACTOR_IDS')) { $envMap['ALLOWED_ACTOR_IDS'] } else { '59250993' }
     $allowed = @($rawAllowed.Split(',') | ForEach-Object { ConvertTo-BackportPositive $_ })
     $actor = ConvertTo-BackportPositive $envMap['GITHUB_ACTOR_ID']
@@ -294,9 +357,7 @@ function New-BackportContext {
     if (-not $triggering -or -not [regex]::IsMatch($triggering, '\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?\z')) {
         throw 'invalid_triggering_actor'
     }
-    $dry = $envMap['INPUT_DRY_RUN']
-    if (-not (Test-BackportLiteral $dry @('true', 'false'))) { throw 'invalid_dry_run' }
-    $source = ConvertTo-BackportPositive $envMap['INPUT_SOURCE_PR'] 2147483648
+    $request = Get-BackportRequest $envMap $actor $allowed
     $run = $envMap['GITHUB_RUN_ID']; $attempt = $envMap['GITHUB_RUN_ATTEMPT']
     $null = ConvertTo-BackportPositive $run
     $null = ConvertTo-BackportPositive $attempt
@@ -333,7 +394,7 @@ function New-BackportContext {
     $null = Get-BackportToken -Environment $Environment
     $config = New-BackportDictionary
     foreach ($entry in @{
-        source_pr = [int]$source; dry_run = (Test-BackportLiteral $dry @('true')); actor_id = $actor
+        source_pr = $request.source_pr; dry_run = $request.dry_run; actor_id = $actor
         triggering_actor = $triggering; allowed_actor_ids = $allowed; run_id = $run
         run_attempt = $attempt; state_dir = $state; work_dir = $work
         output = $outputs[0]; summary = $outputs[1]
@@ -2067,6 +2128,7 @@ function Get-BackportSafeReason {
     param([string]$Reason)
     $allowed = @(
         'invalid_stage','wrong_repository','wrong_repository_id','wrong_execution_ref','invalid_number',
+        'wrong_workflow_ref','unsupported_event','invalid_event_file','invalid_label_event','sender_not_allowed','request_projection_mismatch',
         'actor_not_allowed','invalid_triggering_actor','invalid_dry_run','missing_local_directories',
         'invalid_local_path','overlapping_directories','script_inside_work_directory','invalid_output_path',
         'missing_or_invalid_token','invalid_compatibility_data','invalid_artifact','duplicate_json_key',

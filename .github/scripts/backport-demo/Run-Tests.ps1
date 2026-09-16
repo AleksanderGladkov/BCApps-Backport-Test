@@ -4,7 +4,7 @@
 # Setup: Install-Module Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Repository PSGallery
 [CmdletBinding()]
 param(
-    [ValidateSet('EPIC-001', 'EPIC-002', 'EPIC-003')][string]$Epic,
+    [ValidateSet('EPIC-001', 'EPIC-002', 'EPIC-003', 'L-001')][string]$Epic,
     [string]$ResultPath,
     [string]$ParityPath
 )
@@ -47,6 +47,54 @@ function Get-BackportTestTags {
     return ,$tags
 }
 
+function Get-BackportLabelWorkflowEdits {
+    $source = '${{ github.event_name == ''pull_request_target'' && github.event.pull_request.number || inputs.source_pr }}'
+    $dry = '${{ github.event_name == ''workflow_dispatch'' && inputs.dry_run && ''true'' || ''false'' }}'
+    @(
+        @{
+            Before = 'run-name: Backport PR ${{ inputs.source_pr }} to 29.x (dry run = ${{ inputs.dry_run }})'
+            After = "run-name: Backport PR $source to 29.x (dry run = $dry)"; Count = 1
+        }
+        @{
+            Before = "on:`n  workflow_dispatch:"
+            After = "on:`n  pull_request_target:`n    types: [labeled]`n    branches: [main]`n  workflow_dispatch:"; Count = 1
+        }
+        @{
+            Before = '  group: backport-demo-${{ github.repository_id }}-${{ inputs.source_pr }}-29'
+            After = '  group: backport-demo-${{ github.repository_id }}-${{ (github.event_name == ''workflow_dispatch'' || (github.event_name == ''pull_request_target'' && github.event.action == ''labeled'' && github.event.label.name == ''backport:29.x'' && github.event.pull_request.merged == true && github.event.pull_request.state == ''closed'' && github.event.pull_request.base.ref == ''main'' && github.event.repository.id == 1369849596 && github.event.repository.full_name == ''AleksanderGladkov/BCApps-Backport-Test'' && github.event.pull_request.base.repo.id == 1369849596 && github.event.pull_request.base.repo.full_name == ''AleksanderGladkov/BCApps-Backport-Test'' && github.event.number == github.event.pull_request.number && github.event.number > 0 && github.event.number < 2147483648)) && (github.event_name == ''pull_request_target'' && github.event.pull_request.number || inputs.source_pr) || format(''rejected-{0}'', github.run_id) }}-29'
+            Count = 1
+        }
+        @{ Before = '  INPUT_SOURCE_PR: ${{ inputs.source_pr }}'; After = "  INPUT_SOURCE_PR: $source"; Count = 1 }
+        @{ Before = '  INPUT_DRY_RUN: ${{ inputs.dry_run && ''true'' || ''false'' }}'; After = "  INPUT_DRY_RUN: $dry"; Count = 1 }
+        @{
+            Before = '          ref: ${{ github.sha }}'
+            After = '          ref: ${{ github.workflow_sha }}'; Count = 4
+        }
+        @{
+            Before = "  validate:`n"
+            After = "  validate:`n    outputs:`n" + '      plan_ready: ${{ steps.validate.outputs.plan_ready }}' + "`n"; Count = 1
+        }
+        @{
+            Before = "      - name: Validate requester, source history and target`n"
+            After = "      - name: Validate requester, source history and target`n        id: validate`n"; Count = 1
+        }
+        @{
+            Before = "  track:`n    needs: validate`n"
+            After = "  track:`n    needs: validate`n    if: needs.validate.outputs.plan_ready == 'true'`n"; Count = 1
+        }
+    )
+}
+
+function ConvertFrom-BackportLabelWorkflow {
+    param([string]$Text)
+    # Reverse only the explicitly asserted feature delta, then require the complete historical hash and blocks.
+    foreach ($edit in Get-BackportLabelWorkflowEdits) {
+        if ([regex]::Matches($Text, [regex]::Escape($edit.After)).Count -ne $edit.Count) { throw 'workflow_baseline_mismatch' }
+        $Text = $Text.Replace($edit.After, $edit.Before)
+    }
+    $Text
+}
+
 function Assert-BackportWorkflowBaseline {
     param($Parity, [string]$ProductionText, [string]$TestsText)
     $expected = @{
@@ -78,6 +126,9 @@ function Assert-BackportWorkflowBaseline {
             throw 'workflow_baseline_mismatch'
         }
         $text = $contract.Text.Replace("`r`n", "`n")
+        if ($kind -ceq 'production' -and $text.Contains('pull_request_target', [StringComparison]::Ordinal)) {
+            $text = ConvertFrom-BackportLabelWorkflow $text
+        }
         $hash = [Convert]::ToHexString(
             [Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($text))
         ).ToLowerInvariant()
@@ -132,13 +183,14 @@ function Test-BackportAcceptance {
     param(
         [AllowNull()]$Result,
         [AllowNull()]$Parity,
-        [ValidateSet('EPIC-001', 'EPIC-002', 'EPIC-003')][string]$Epic
+        [ValidateSet('EPIC-001', 'EPIC-002', 'EPIC-003', 'L-001')][string]$Epic
     )
     $errors = [Collections.Generic.List[string]]::new()
     $tests = @($Result.Tests | Where-Object { $null -ne $_ })
     $mode = if ($Epic) { 'Development' } else { 'FullAcceptance' }
     $baselinePassed = 0
     $migrationPassed = 0
+    $labelPassed = 0
     if ($null -eq $Result -or $tests.Count -eq 0 -or $Result.TotalCount -le 0) {
         $errors.Add('zero discovery or missing result')
     }
@@ -232,6 +284,13 @@ function Test-BackportAcceptance {
                 $migrationPassed++
             }
         }
+        foreach ($id in @(1..5 | ForEach-Object { 'LT-{0:d2}' -f $_ })) {
+            $matches = @($tests | Where-Object { (Get-BackportTestTags $_).Contains($id) })
+            if ($matches.Count -eq 0) { $errors.Add("missing label case: $id") }
+            elseif (@($matches | Where-Object { $_.Result -cne 'Passed' -or $_.Executed -ne $true }).Count -eq 0) {
+                $labelPassed++
+            }
+        }
         if ($Result.SkippedCount -gt 0 -or $Result.NotRunCount -gt 0) {
             $errors.Add('full acceptance cannot contain skipped or unexecuted cases')
         }
@@ -240,7 +299,7 @@ function Test-BackportAcceptance {
         "Development $Epic - NOT full acceptance."
     }
     else {
-        "Full acceptance: $baselinePassed/67 distinct baseline cases; $migrationPassed/12 migration IDs."
+        "Full acceptance: $baselinePassed/67 distinct baseline cases; $migrationPassed/12 migration IDs; $labelPassed/5 label IDs."
     }
     [pscustomobject]@{
         Accepted = $errors.Count -eq 0
@@ -249,6 +308,7 @@ function Test-BackportAcceptance {
         Message = $message
         BaselinePassed = $baselinePassed
         MigrationPassed = $migrationPassed
+        LabelPassed = $labelPassed
         Errors = $errors.ToArray()
     }
 }
@@ -256,7 +316,7 @@ function Test-BackportAcceptance {
 function Invoke-BackportTests {
     [CmdletBinding()]
     param(
-        [ValidateSet('EPIC-001', 'EPIC-002', 'EPIC-003')][string]$Epic,
+        [ValidateSet('EPIC-001', 'EPIC-002', 'EPIC-003', 'L-001')][string]$Epic,
         [string]$ResultPath,
         [string]$ParityPath = (Join-Path $PSScriptRoot 'parity.json')
     )

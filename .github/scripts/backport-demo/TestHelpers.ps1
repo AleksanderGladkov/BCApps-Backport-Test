@@ -1,5 +1,79 @@
 # Test-only boundaries. Injected HTTP fixtures never open a network connection.
 
+function Set-BackportTestEventFile {
+    param($Environment, $Event, [string]$Path = $Environment.GITHUB_EVENT_PATH)
+    $Environment.GITHUB_EVENT_PATH = $Path
+    [IO.File]::WriteAllText($Path, (ConvertTo-Json -InputObject $Event -Depth 100 -Compress))
+}
+
+function Set-BackportDispatchTestEvent {
+    param($Environment, [string]$Path = $Environment.GITHUB_EVENT_PATH)
+    Set-BackportTestEventFile $Environment @{
+        repository = @{ id = 1369849596; full_name = 'AleksanderGladkov/BCApps-Backport-Test' }
+        ref = 'main'
+        inputs = @{ source_pr = $Environment.INPUT_SOURCE_PR; dry_run = $Environment.INPUT_DRY_RUN }
+    } $Path
+}
+
+function New-BackportLabelTestEvent {
+    param($Test)
+    @{
+        action = 'labeled'; number = 7; label = @{ name = 'backport:29.x' }
+        repository = (Copy-BackportTestValue $Test.Api.repo)
+        sender = @{ id = 59250993; login = 'AleksanderGladkov' }
+        pull_request = @{
+            number = 7; merged = $true; state = 'closed'
+            base = @{ ref = 'main'; repo = (Copy-BackportTestValue $Test.Api.repo) }
+        }
+    }
+}
+
+function Assert-BackportRequestRejected {
+    param($Test)
+    foreach ($stage in @('validate', 'track', 'prepare', 'publish')) {
+        {
+            $Test.Config = & $Test.Module { param($e) New-BackportContext -Environment $e } $Test.Environment
+            Invoke-BackportTestStage $Test $stage
+        } | Should -Throw
+    }
+    $Test.Api.calls.Count | Should -Be 0
+    $Test.GitCalls.Count | Should -Be 0
+    $Test.Pushes.Count | Should -Be 0
+    Test-Path -LiteralPath (Join-Path $Test.Environment.RUNNER_TEMP 'backport-state') | Should -BeFalse
+}
+
+function Get-BackportWorkflowTestProjection {
+    param([string]$Text, [string]$EventName, $Event, [string]$Source = '7', $Dry = $null, [string]$Run = '123')
+    # A fixture for these exact expressions, not a general Actions evaluator.
+    $sourceExpression = '${{ github.event_name == ''pull_request_target'' && github.event.pull_request.number || inputs.source_pr }}'
+    $dryExpression = '${{ github.event_name == ''workflow_dispatch'' && inputs.dry_run && ''true'' || ''false'' }}'
+    $Text | Should -Match '(?m)^        default: true$'
+    $Text | Should -Match '(?m)^        type: boolean$'
+    [regex]::Match($Text, '(?m)^  INPUT_SOURCE_PR: (.+)$').Groups[1].Value | Should -BeExactly $sourceExpression
+    [regex]::Match($Text, '(?m)^  INPUT_DRY_RUN: (.+)$').Groups[1].Value | Should -BeExactly $dryExpression
+    $title = [regex]::Match($Text, '(?m)^run-name: (.+)$').Groups[1].Value
+    $title | Should -BeExactly "Backport PR $sourceExpression to 29.x (dry run = $dryExpression)"
+    if ($null -eq $Dry) { $Dry = $true } # Only the workflow's declared input default supplies this.
+    $label = $EventName -eq 'pull_request_target'
+    $sourceValue = if ($label -and $Event.pull_request.number) { [string]$Event.pull_request.number } else { $Source }
+    $dryValue = if ($EventName -eq 'workflow_dispatch' -and $Dry) { 'true' } else { 'false' }
+    $eligible = $EventName -eq 'workflow_dispatch' -or ($label -and $Event.action -eq 'labeled' -and
+        $Event.label.name -eq 'backport:29.x' -and $Event.pull_request.merged -eq $true -and
+        $Event.pull_request.state -eq 'closed' -and $Event.pull_request.base.ref -eq 'main' -and
+        $Event.repository.id -eq 1369849596 -and $Event.repository.full_name -eq 'AleksanderGladkov/BCApps-Backport-Test' -and
+        $Event.pull_request.base.repo.id -eq 1369849596 -and
+        $Event.pull_request.base.repo.full_name -eq 'AleksanderGladkov/BCApps-Backport-Test' -and
+        $Event.number -eq $Event.pull_request.number -and $Event.number -gt 0 -and $Event.number -lt 2147483648)
+    $group = [regex]::Match($Text, '(?m)^  group: (.+)$').Groups[1].Value
+    $groupEdit = @(Get-BackportLabelWorkflowEdits | Where-Object { $_.Before.StartsWith('  group:', [StringComparison]::Ordinal) })
+    $group | Should -BeExactly $groupEdit[0].After.Trim().Substring('group: '.Length)
+    @{
+        source = $sourceValue; dry = $dryValue
+        title = $title.Replace($sourceExpression, $sourceValue).Replace($dryExpression, $dryValue)
+        group = 'backport-demo-1369849596-' + $(if ($eligible) { $sourceValue } else { "rejected-$Run" }) + '-29'
+    }
+}
+
 function New-BackportStageTest {
     param([string]$ParentPath, $Module, $Template)
     $fixture = New-LocalGitFixture -ParentPath $ParentPath
@@ -9,6 +83,10 @@ function New-BackportStageTest {
         Environment = @{
             GITHUB_REPOSITORY = 'AleksanderGladkov/BCApps-Backport-Test'
             GITHUB_REPOSITORY_ID = '1369849596'; GITHUB_REF = 'refs/heads/main'
+            GITHUB_EVENT_NAME = 'workflow_dispatch'
+            GITHUB_EVENT_PATH = (Join-Path $fixture.Root 'event.json')
+            GITHUB_WORKFLOW_REF = 'AleksanderGladkov/BCApps-Backport-Test/.github/workflows/backport-demo.yml@refs/heads/main'
+            GITHUB_WORKFLOW_SHA = ('a' * 40)
             GITHUB_ACTOR_ID = '59250993'; GITHUB_TRIGGERING_ACTOR = 'AleksanderGladkov'
             INPUT_SOURCE_PR = '7'; INPUT_DRY_RUN = 'false'
             GITHUB_RUN_ID = '123'; GITHUB_RUN_ATTEMPT = '1'
@@ -52,6 +130,9 @@ function Invoke-BackportStageProcess {
 
 function Set-BackportStageConfig {
     param($Test)
+    if ($Test.Environment.GITHUB_EVENT_NAME -ceq 'workflow_dispatch') {
+        Set-BackportDispatchTestEvent $Test.Environment
+    }
     $Test.Config = & $Test.Module { param($e) New-BackportContext -Environment $e } $Test.Environment
     $current = New-FakeWorkflowRun -Api $Test.Api -Id ([long]$Test.Config.run_id) -Attempt ([int]$Test.Config.run_attempt) `
         -SourcePr $Test.Config.source_pr -DryRun $Test.Config.dry_run
@@ -442,6 +523,14 @@ function Get-BackportReferenceInput {
     Assert-LocalGitFixture $Test.Fixture
     $environment = Copy-BackportTestValue $Test.Environment
     if ($environment.GH_TOKEN -cne 'offline-fixture') { throw 'synthetic_credential_required' }
+    if (-not [string]::Equals($environment.GITHUB_EVENT_NAME, 'workflow_dispatch', [StringComparison]::Ordinal)) {
+        throw 'label_not_historical_reference'
+    }
+    $null = & $Test.Module { param($e) New-BackportContext -Environment $e } $environment
+    # The captured manual baseline predates platform-event admission; never recapture or relax its hash.
+    foreach ($key in @('GITHUB_EVENT_NAME', 'GITHUB_EVENT_PATH', 'GITHUB_WORKFLOW_REF', 'GITHUB_WORKFLOW_SHA')) {
+        $environment.Remove($key)
+    }
     $environment.Remove('GH_TOKEN')
     foreach ($key in @('RUNNER_TEMP', 'STATE_DIR', 'WORK_DIR', 'GITHUB_OUTPUT', 'GITHUB_STEP_SUMMARY', 'GITHUB_SUMMARY')) {
         if ($environment.ContainsKey($key)) {
